@@ -39,9 +39,3 @@ Edite os caminhos conforme sua máquina.
 ```bash
 ./scripts/run_isaac.sh
 ```
-
-## Observações
-
-- O Isaac Sim não é versionado no Git.
-- O projeto referencia instalações já existentes na máquina.
-- Os cenários devem ser reproduzíveis por código.
