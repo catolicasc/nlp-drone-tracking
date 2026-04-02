@@ -1,0 +1,21 @@
+world:
+  usd: assets/usd/environment.usd
+
+drones:
+  - name: drone_1
+    model: iris
+    namespace: /drone_1
+    position: [0.0, 0.0, 1.0]
+
+ros2:
+  enabled: true
+  domain_id: 0
+
+px4:
+  enabled: true
+
+sensors:
+  camera:
+    enabled: true
+    width: 1280
+    height: 720
