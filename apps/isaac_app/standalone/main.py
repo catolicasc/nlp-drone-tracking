@@ -1,23 +1,34 @@
-from pathlib import Path
 import os
-import yaml
+import sys
+from pathlib import Path
+
+_STANDALONE_DIR = Path(__file__).resolve().parent
+if str(_STANDALONE_DIR) not in sys.path:
+    sys.path.insert(0, str(_STANDALONE_DIR))
 
 import omni.kit.app
 from omni.isaac.core import World
-from omni.isaac.core.utils.stage import add_reference_to_stage
 from omni.isaac.core.utils.prims import is_prim_path_valid
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.nucleus import get_assets_root_path
 from omni.kit.async_engine import run_coroutine
 
-
-def load_config():
-    project_root = Path(__file__).resolve().parents[3]
-    config_path = project_root / "config" / "sim.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f), project_root
+from config_loader import load_config, resolve_usd_path
+from spawn import PegasusQuadrotorSpec, PersonSpawnSpec, spawn_pegasus_quadrotor, spawn_person
 
 
-def resolve_usd_path(project_root: Path, usd_path: str) -> str:
-    return str((project_root / usd_path).resolve())
+def _spawn_default_person():
+    assets_root = get_assets_root_path()
+    if not assets_root:
+        print("Não consegui localizar os assets do Isaac Sim.")
+        return
+    spec = PersonSpawnSpec(
+        prim_path="/World/People/person_1",
+        asset_rel_path="People/Characters/original_male_adult_police_04/male_adult_police_04.usd",
+        position=(4.0, 0.0, 0.0),
+    )
+    if spawn_person(assets_root, spec):
+        print("1 pessoa adicionada.")
 
 
 async def main_async():
@@ -32,6 +43,8 @@ async def main_async():
     print(f"ISAAC_SIM_PATH={os.getenv('ISAAC_SIM_PATH')}")
     print(f"PEGASUS_PATH={os.getenv('PEGASUS_PATH')}")
     print(f"PX4_PATH={os.getenv('PX4_PATH')}")
+
+    px4_path = os.getenv("PX4_PATH")
 
     if World.instance():
         World.instance().clear_instance()
@@ -53,9 +66,17 @@ async def main_async():
         else:
             print("USD não encontrado, seguindo só com o ground plane.")
 
+    _spawn_default_person()
+
+    if px4_path:
+        spawn_pegasus_quadrotor(world, px4_path, PegasusQuadrotorSpec())
+        print("Drone adicionado com sucesso.")
+    else:
+        print("PX4_PATH não definido; drone não foi criado.")
+
     await world.reset_async()
 
-    print("Mundo iniciado com sucesso.")
+    print("Cena pronta: até 1 drone (PX4) + 1 pessoa.")
 
     app = omni.kit.app.get_app()
     while app.is_running():
