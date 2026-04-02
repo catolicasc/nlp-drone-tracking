@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>drone_arm</name>
+  <version>0.0.1</version>
+  <description>Minimal ROS2 helper to arm a PX4 vehicle via MAVROS</description>
+  <maintainer email="barto@example.com">barto</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>mavros_msgs</depend>
+
+  <exec_depend>python3</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -11,6 +11,11 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 
+# Colcon (quando o build é feito na raiz do repo)
+build/
+install/
+log/
+
 # Logs / temp
 *.log
 tmp/
