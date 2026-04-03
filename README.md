@@ -39,3 +39,18 @@ Edite os caminhos conforme sua máquina.
 ```bash
 ./scripts/run_isaac.sh
 ```
+
+## Armar e voar via ROS2 (MAVROS)
+
+Este projeto suporta controlar o PX4 via MAVLink usando o MAVROS.
+
+Documentação completa:
+
+- `docs/ros2_mavros_offboard.md`
+
+Scripts utilitários:
+
+- `scripts/run_mavros_px4.sh`
+- `scripts/arm_drone.sh`
+- `scripts/offboard_takeoff.sh`
+- `scripts/land_drone.sh`
