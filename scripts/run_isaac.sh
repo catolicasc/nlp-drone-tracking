@@ -25,4 +25,4 @@ fi
 echo "Rodando Isaac Sim com script:"
 echo "$SCRIPT_PATH"
 
-"$ISAAC_SIM_APP" --exec "$SCRIPT_PATH"
+"$ISAAC_SIM_APP" --enable isaacsim.ros2.bridge --exec "$SCRIPT_PATH"

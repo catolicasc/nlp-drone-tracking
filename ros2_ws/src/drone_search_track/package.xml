@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>drone_search_track</name>
+  <version>0.0.1</version>
+  <description>Search and track a person using detections by yaw control via MAVROS setpoint_position/local.</description>
+  <maintainer email="you@example.com">you</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>vision_msgs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
