@@ -1,5 +1,8 @@
 world:
-  usd: assets/usd/environment.usd
+  isaac_asset_rel_path: ""
+  spawn_area_half_extent_m: 80.0
+  spawn_area_center_xy: [0.0, 0.0]
+  spawn_area_from_default_prim: true
 
 drones:
   - name: drone_1
@@ -19,3 +22,21 @@ sensors:
     enabled: true
     width: 1280
     height: 720
+    position: [0.15, 0.0, 0.70]
+    orientation_rpy_deg: [0.0, -35.0, 0.0]
+    publish_depth: true
+    depth_topic: depth
+    depth_type: depth
+    publish_realsense_compat: true
+    realsense_namespace: camera
+    realsense_color_frame_id: camera_color_optical_frame
+    realsense_depth_frame_id: camera_depth_optical_frame
+    realsense_color_topic: color/image_raw
+    realsense_color_info_topic: color/camera_info
+    realsense_depth_topic: depth/image_rect_raw
+    realsense_depth_info_topic: depth/camera_info
+
+people:
+  count: 500
+  min_distance_m: 0.0
+  z: 0.0

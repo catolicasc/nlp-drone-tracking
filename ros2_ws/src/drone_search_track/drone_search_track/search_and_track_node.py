@@ -72,7 +72,7 @@ class SearchAndTrackNode(Node):
         self.declare_parameter("local_pose_topic", "/mavros/local_position/pose")
 
         self.declare_parameter("rate_hz", 20.0)
-        self.declare_parameter("takeoff_z", 1.5)
+        self.declare_parameter("takeoff_z", 5.0)
         self.declare_parameter("pre_setpoints_sec", 2.5)
 
         self.declare_parameter("search_yaw_rate", 0.35)

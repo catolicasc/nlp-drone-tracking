@@ -1,6 +1,8 @@
 import os
 import sys
 from pathlib import Path
+import random
+import math
 import threading
 import time
 
@@ -15,11 +17,11 @@ from omni.isaac.core.utils.stage import add_reference_to_stage
 from omni.isaac.core.utils.stage import get_current_stage
 from omni.isaac.nucleus import get_assets_root_path
 from omni.kit.async_engine import run_coroutine
-from pxr import UsdLux
+from pxr import Gf, Usd, UsdGeom, UsdLux
 
 from config_loader import load_config, resolve_usd_path
 from sensors import setup_sensors
-from spawn import PegasusQuadrotorSpec, PersonSpawnSpec, spawn_pegasus_quadrotor, spawn_person
+from spawn import PegasusQuadrotorSpec, PersonSpawnSpec, spawn_pegasus_quadrotor, spawn_people
 
 
 class _PersonFoundListener:
@@ -79,19 +81,79 @@ def _ensure_drone_light(drone_prim_path: str = "/World/quadrotor"):
     light.CreateColorAttr((1.0, 0.2, 0.2))
     return light
 
-
-def _spawn_default_person():
+def _spawn_random_people(
+    n_people: int = 20,
+    min_distance_m: float = 10.0,
+    area_half_extent_m: float = 60.0,
+    area_center_xy: tuple[float, float] = (0.0, 0.0),
+    z: float = 0.0,
+):
     assets_root = get_assets_root_path()
     if not assets_root:
         print("Não consegui localizar os assets do Isaac Sim.")
         return
-    spec = PersonSpawnSpec(
-        prim_path="/World/People/person_1",
-        asset_rel_path="People/Characters/original_male_adult_police_04/male_adult_police_04.usd",
-        position=(4.0, 0.0, 0.0),
+
+    asset_rel_path = "People/Characters/original_male_adult_police_04/male_adult_police_04.usd"
+
+    min_d_requested = max(0.0, float(min_distance_m))
+    half = max(1.0, float(area_half_extent_m))
+    cx = float(area_center_xy[0])
+    cy = float(area_center_xy[1])
+    z = float(z)
+
+    print(
+        "[people] spawn bounds: "
+        f"x=[{(cx - half):.2f},{(cx + half):.2f}] "
+        f"y=[{(cy - half):.2f},{(cy + half):.2f}] "
+        f"min_distance={min_d_requested:.2f}m count={int(n_people)}"
     )
-    if spawn_person(assets_root, spec):
-        print("1 pessoa adicionada.")
+
+    def _sample_positions(min_d: float) -> list[tuple[float, float, float]]:
+        positions: list[tuple[float, float, float]] = []
+        max_attempts = max(4000, n_people * 800)
+        attempts = 0
+        while len(positions) < n_people and attempts < max_attempts:
+            attempts += 1
+            x = random.uniform(cx - half, cx + half)
+            y = random.uniform(cy - half, cy + half)
+
+            ok = True
+            if min_d > 0.0:
+                for (px, py, _pz) in positions:
+                    if math.hypot(x - px, y - py) < min_d:
+                        ok = False
+                        break
+
+            if ok:
+                positions.append((float(x), float(y), float(z)))
+        return positions
+
+    min_d = float(min_d_requested)
+    positions = _sample_positions(min_d)
+    while len(positions) < n_people and min_d > 0.0:
+        min_d = max(0.0, min_d * 0.9)
+        positions = _sample_positions(min_d)
+
+    if len(positions) < n_people:
+        # As a last resort, ignore spacing but keep everyone inside bounds.
+        min_d = 0.0
+        positions = _sample_positions(min_d)
+
+    specs = []
+    for i, p in enumerate(positions, start=1):
+        specs.append(
+            PersonSpawnSpec(
+                prim_path=f"/World/People/person_{i}",
+                asset_rel_path=asset_rel_path,
+                position=p,
+            )
+        )
+
+    n = spawn_people(assets_root, specs)
+    if min_d_requested > 0.0 and min_d < min_d_requested:
+        print(f"{n} pessoas adicionadas. (min_distance relaxada: {min_d_requested:.2f} -> {min_d:.2f} m)")
+    else:
+        print(f"{n} pessoas adicionadas.")
 
 
 async def main_async():
@@ -129,7 +191,73 @@ async def main_async():
         else:
             print("USD não encontrado, seguindo só com o ground plane.")
 
-    _spawn_default_person()
+    world_asset_rel = config.get("world", {}).get("isaac_asset_rel_path")
+    if world_asset_rel:
+        assets_root = get_assets_root_path()
+        if not assets_root:
+            print("Não consegui localizar os assets do Isaac Sim.")
+        else:
+            usd_path = f"{assets_root}/Isaac/{str(world_asset_rel).lstrip('/')}"
+            prim_path = "/World/Environment"
+            if not is_prim_path_valid(prim_path):
+                add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+                print(f"Ambiente Isaac carregado em {prim_path}: {usd_path}")
+
+    def _spawn_bounds_from_default_prim() -> tuple[tuple[float, float], float] | None:
+        stage = get_current_stage()
+        default_prim = stage.GetDefaultPrim()
+        if not default_prim or not default_prim.IsValid():
+            return None
+
+        try:
+            bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+            bbox = bbox_cache.ComputeWorldBound(default_prim)
+            r = bbox.GetRange()
+            minp = r.GetMin()
+            maxp = r.GetMax()
+            if not (minp and maxp):
+                return None
+
+            minx, miny = float(minp[0]), float(minp[1])
+            maxx, maxy = float(maxp[0]), float(maxp[1])
+            if not (math.isfinite(minx) and math.isfinite(miny) and math.isfinite(maxx) and math.isfinite(maxy)):
+                return None
+
+            cx = 0.5 * (minx + maxx)
+            cy = 0.5 * (miny + maxy)
+            half = 0.5 * min(maxx - minx, maxy - miny)
+            if half <= 0.1:
+                return None
+            half *= 0.9
+
+            return (cx, cy), float(half)
+        except Exception:
+            return None
+
+    people_cfg = config.get("people", {}) or {}
+    n_people = int(people_cfg.get("count", 20))
+    min_distance_m = float(people_cfg.get("min_distance_m", 10.0))
+    people_z = float(people_cfg.get("z", 0.0))
+    world_cfg = config.get("world", {}) or {}
+    area_half = float(world_cfg.get("spawn_area_half_extent_m", 60.0))
+    area_center = world_cfg.get("spawn_area_center_xy", [0.0, 0.0])
+    try:
+        area_center_xy = (float(area_center[0]), float(area_center[1]))
+    except Exception:
+        area_center_xy = (0.0, 0.0)
+
+    if bool(world_cfg.get("spawn_area_from_default_prim", False)):
+        auto_bounds = _spawn_bounds_from_default_prim()
+        if auto_bounds is not None:
+            area_center_xy, area_half = auto_bounds
+            print(f"[people] auto bounds from defaultPrim: center=({area_center_xy[0]:.2f},{area_center_xy[1]:.2f}) half={area_half:.2f}")
+    _spawn_random_people(
+        n_people=n_people,
+        min_distance_m=min_distance_m,
+        area_half_extent_m=area_half,
+        area_center_xy=area_center_xy,
+        z=people_z,
+    )
 
     if px4_path:
         spawn_pegasus_quadrotor(world, px4_path, PegasusQuadrotorSpec())

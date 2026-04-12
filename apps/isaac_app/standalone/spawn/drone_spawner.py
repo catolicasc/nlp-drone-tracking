@@ -22,7 +22,7 @@ class PegasusQuadrotorSpec:
     stage_prefix: str = "/World/quadrotor"
     usd_file_key: str = "Iris"
     vehicle_id: int = 0
-    init_pos: tuple[float, float, float] = (0.0, 0.0, 1.5)
+    init_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     init_orientation_xyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     connection_type: str = "tcpin"
     connection_ip: str = "localhost"

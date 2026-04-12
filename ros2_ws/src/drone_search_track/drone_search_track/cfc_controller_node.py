@@ -52,7 +52,8 @@ class CfcControllerNode(Node):
         self.declare_parameter("local_pose_topic", "/mavros/local_position/pose")
 
         self.declare_parameter("rate_hz", 20.0)
-        self.declare_parameter("takeoff_z", 1.5)
+        self.declare_parameter("takeoff_z", 5.0)
+        self.declare_parameter("min_flight_z", 5.0)
         self.declare_parameter("pre_setpoints_sec", 2.5)
 
         self.declare_parameter("policy_mode", "tracking_only")  # tracking_only | search_and_track
@@ -92,8 +93,10 @@ class CfcControllerNode(Node):
 
         self._cmd_x = 0.0
         self._cmd_y = 0.0
-        self._cmd_z = float(self.get_parameter("takeoff_z").value)
-        self._hold_z = float(self.get_parameter("takeoff_z").value)
+        takeoff_z = float(self.get_parameter("takeoff_z").value)
+        min_flight_z = float(self.get_parameter("min_flight_z").value)
+        self._hold_z = max(takeoff_z, min_flight_z)
+        self._cmd_z = float(self._hold_z)
         self._yaw = 0.0
         self._yaw_rate_filt = 0.0
 
@@ -386,7 +389,8 @@ class CfcControllerNode(Node):
 
         desired_x = float(self._cmd_x)
         desired_y = float(self._cmd_y)
-        desired_z = float(self._hold_z)
+        min_flight_z = float(self.get_parameter("min_flight_z").value)
+        desired_z = max(float(self._hold_z), float(min_flight_z))
 
         if have_fresh_det and self._hover_active:
             desired_x = float(self._hover_x)
