@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "search_and_track = drone_search_track.search_and_track_node:main",
+            "cfc_controller = drone_search_track.cfc_controller_node:main",
         ],
     },
 )
