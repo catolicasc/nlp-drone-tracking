@@ -46,9 +46,9 @@ _cleanup_px4_tmp() {
 _cleanup_px4_tmp
 
 echo "==> Próximo passo (outro terminal), após a sim carregar:"
-echo "    ./scripts/voar_drone.sh"
-echo
-echo "    (ou só MAVROS: ./scripts/run_mavros_px4.sh)"
+echo "    QGroundControl: link UDP padrão porta 14550 (ver docs/qgroundcontrol.md)"
+echo "    ou MAVROS:      ./scripts/run_mavros_px4.sh"
+echo "    ou voar ROS:    ./scripts/voar_drone.sh"
 echo
 
 exec "$PROJECT_ROOT/scripts/run_isaac.sh" "$@"

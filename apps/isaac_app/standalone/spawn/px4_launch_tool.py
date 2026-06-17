@@ -60,8 +60,47 @@ class PX4LaunchTool:
         self.environment = os.environ.copy()
         self.environment["PX4_SIM_MODEL"] = px4_model
 
+    def _prepare_mavlink_gcs_broadcast(self) -> str:
+        """
+        PX4 SITL escuta MAVLink GCS em UDP 18570 e envia para 14550.
+        Sem broadcast (-p), o QGroundControl (que escuta 14550) não recebe dados.
+        """
+        src = os.path.join(self.etc_root, "init.d-posix", "px4-rc.mavlink")
+        overlay_dir = os.path.join(self.root_fs.name, "init.d-posix")
+        os.makedirs(overlay_dir, exist_ok=True)
+        dst = os.path.join(overlay_dir, "px4-rc.mavlink")
+
+        with open(src, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+        patched: list[str] = []
+        for line in lines:
+            if (
+                "mavlink start" in line
+                and "udp_gcs_port_local" in line
+                and "-p" not in line
+            ):
+                line = line.replace(
+                    "-r 4000000 -f",
+                    "-r 4000000 -f -p -o $((14550+px4_instance))",
+                    1,
+                )
+            patched.append(line)
+
+        with open(dst, "w", encoding="utf-8") as f:
+            f.write("\n".join(patched) + "\n")
+
+        # rcS faz `. px4-rc.mavlink` via PATH — overlay tem prioridade.
+        path_prefix = overlay_dir
+        self.environment["PATH"] = (
+            f"{path_prefix}:{self.environment.get('PATH', '')}"
+        )
+        print("[px4] MAVLink GCS: broadcast habilitado para QGroundControl (porta 14550)")
+        return dst
+
     def launch_px4(self) -> None:
         cleanup_px4_lock_files(self.vehicle_id)
+        self._prepare_mavlink_gcs_broadcast()
         self.px4_process = subprocess.Popen(
             [
                 self.px4_bin,
