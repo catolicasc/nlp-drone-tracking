@@ -6,6 +6,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+import pegasus.simulator.logic.backends.px4_mavlink_backend as _px4_mavlink_backend
+
+from .px4_launch_tool import PX4LaunchTool as _FixedPX4LaunchTool
+
+# PX4 recente exige build/px4_sitl_default/etc (não ROMFS cru).
+_px4_mavlink_backend.PX4LaunchTool = _FixedPX4LaunchTool
+
 from pegasus.simulator.logic.backends.px4_mavlink_backend import (
     PX4MavlinkBackend,
     PX4MavlinkBackendConfig,

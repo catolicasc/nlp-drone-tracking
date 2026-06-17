@@ -37,6 +37,6 @@ sensors:
     realsense_depth_info_topic: depth/camera_info
 
 people:
-  count: 500
+  count: 10
   min_distance_m: 0.0
   z: 0.0
