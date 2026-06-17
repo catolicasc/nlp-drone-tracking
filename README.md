@@ -54,3 +54,10 @@ Scripts utilitários:
 - `scripts/arm_drone.sh`
 - `scripts/offboard_takeoff.sh`
 - `scripts/land_drone.sh`
+
+## Agente LVLM (ARNA-style)
+
+Orquestra percepção + navegação com linguagem natural:
+
+- `docs/lvlm_agent.md`
+- `scripts/run_lvlm_agent.sh`

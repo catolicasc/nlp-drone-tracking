@@ -48,6 +48,7 @@ _cleanup_px4_tmp
 echo "==> Próximo passo (outro terminal), após a sim carregar:"
 echo "    QGroundControl: link UDP padrão porta 14550 (ver docs/qgroundcontrol.md)"
 echo "    ou MAVROS:      ./scripts/run_mavros_px4.sh"
+echo "    ou agente LVLM: ./scripts/run_lvlm_agent.sh \"sua tarefa\""
 echo "    ou voar ROS:    ./scripts/voar_drone.sh"
 echo
 
