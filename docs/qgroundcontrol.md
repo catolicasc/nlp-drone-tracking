@@ -9,7 +9,7 @@
 | MAVROS (opcional) | fala com **18570** | cliente |
 | Simulador HIL (Pegasus) | **4560** TCP | Isaac/Pegasus |
 
-O PX4 **não** fala na 14550 diretamente — ele escuta na **18570** e **envia** telemetria para a **14550** (onde o QGC escuta por padrão).
+O PX4 **não** fala na 14550 diretamente, ele escuta na **18570** e **envia** telemetria para a **14550** (onde o QGC escuta por padrão).
 
 Sem **broadcast MAVLink** (`-p` no `mavlink start`), o QGC fica em "Disconnected" mesmo com a sim rodando.
 
