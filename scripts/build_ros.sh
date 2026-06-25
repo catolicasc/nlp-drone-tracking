@@ -11,9 +11,11 @@ fi
 
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 
+set +u
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+set -u
 
 cd "$PROJECT_ROOT/ros2_ws"
-colcon build
+colcon build --symlink-install
 
 echo "Build ROS 2 concluído."

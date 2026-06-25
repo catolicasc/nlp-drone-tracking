@@ -20,8 +20,14 @@ if str(_STANDALONE_DIR) not in sys.path:
     sys.path.insert(0, str(_STANDALONE_DIR))
 
 _pegasus_path = os.getenv("PEGASUS_PATH")
-if _pegasus_path and _pegasus_path not in sys.path:
-    sys.path.insert(0, _pegasus_path)
+if _pegasus_path:
+    _pegasus_paths = [
+        Path(_pegasus_path),
+        Path(_pegasus_path) / "extensions" / "pegasus.simulator",
+    ]
+    for _path in _pegasus_paths:
+        if _path.exists() and str(_path) not in sys.path:
+            sys.path.insert(0, str(_path))
 
 import carb
 from isaacsim import SimulationApp
