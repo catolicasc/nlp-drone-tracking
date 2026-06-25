@@ -22,7 +22,7 @@ sensors:
     enabled: true
     width: 1280
     height: 720
-    position: [0.15, 0.0, 0.70]
+    position: [0.1701, 0.01521, -0.01314]
     orientation_rpy_deg: [0.0, -35.0, 0.0]
     publish_depth: true
     depth_topic: depth

@@ -31,3 +31,4 @@ temp/
 .DS_Store
 
 .venv-scene/
+.python_deps

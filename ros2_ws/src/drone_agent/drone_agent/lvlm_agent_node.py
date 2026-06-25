@@ -223,7 +223,8 @@ class LvlmAgentNode(Node):
                     args = {}
 
                 result = self._tools.execute(name, args)
-                self._publish_status(f"{name}: {result[:240]}")
+                # Erros de arming/OFFBOARD trazem diagnóstico estruturado; não truncar.
+                self._publish_status(f"{name}: {result}")
 
                 messages.append(
                     {
