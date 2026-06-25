@@ -54,7 +54,7 @@ class CfcControllerNode(Node):
         self.declare_parameter("rate_hz", 20.0)
         self.declare_parameter("takeoff_z", 5.0)
         self.declare_parameter("min_flight_z", 5.0)
-        self.declare_parameter("pre_setpoints_sec", 2.5)
+        self.declare_parameter("pre_setpoints_sec", 2.0)
 
         self.declare_parameter("policy_mode", "tracking_only")  # tracking_only | search_and_track
 

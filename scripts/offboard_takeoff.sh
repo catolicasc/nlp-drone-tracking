@@ -8,7 +8,7 @@ X=${2:-0.0}
 Y=${3:-0.0}
 RATE=${4:-20}
 VERBOSE=${VERBOSE:-0}
-PRE_SETPOINT_SEC=${PRE_SETPOINT_SEC:-5}
+PRE_SETPOINT_SEC=${PRE_SETPOINT_SEC:-2}
 
 _ros_setup() {
   if [ -f /opt/ros/jazzy/setup.bash ]; then
@@ -109,27 +109,27 @@ print_diagnostics() {
   echo "-----------------------"
 }
 
-wait_mavros_state 20
-wait_mavros_connected 30
+wait_mavros_state 10
+wait_mavros_connected 15
 
 echo "Aquecendo setpoints por ${PRE_SETPOINT_SEC}s (PX4 exige stream antes de OFFBOARD)..."
 sleep "${PRE_SETPOINT_SEC}"
 
 # Sequência correta PX4: OFFBOARD -> ARM (com setpoints já fluindo).
-for _ in $(seq 1 15); do
+for _ in $(seq 1 10); do
   call_set_mode_offboard
   if is_offboard; then
     break
   fi
-  sleep 0.4
+  sleep 0.2
 done
 
-for _ in $(seq 1 15); do
+for _ in $(seq 1 10); do
   call_arm
   if is_armed; then
     break
   fi
-  sleep 0.4
+  sleep 0.2
 done
 
 if ! is_armed || ! is_offboard; then

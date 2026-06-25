@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from typing import Any
@@ -24,22 +25,80 @@ class HeuristicPlanner:
     def plan(self, task: str, status: dict[str, Any]) -> list[dict[str, Any]]:
         t = task.lower()
         steps: list[dict[str, Any]] = [{"name": "get_drone_status", "arguments": {}}]
-        if any(w in t for w in ("decol", "takeoff", "subir", "voar")):
-            z = 2.0
-            for token in t.replace(",", " ").split():
-                try:
-                    z = float(token)
-                    break
-                except ValueError:
-                    continue
+        planned_action = False
+
+        takeoff_words = (
+            "decol",
+            "takeoff",
+            "subir",
+            "suba",
+            "sobe",
+            "ergu",
+            "levantar",
+            "levante",
+            "voar",
+            "voe",
+            "sobrevo",
+        )
+        if any(w in t for w in takeoff_words):
+            z = self._extract_altitude_m(t, default=2.0)
             steps.append({"name": "takeoff", "arguments": {"z": z}})
+            planned_action = True
         if any(w in t for w in ("procur", "search", "encontr", "pessoa", "person")):
             steps.append({"name": "get_detections", "arguments": {}})
             steps.append({"name": "hover", "arguments": {"duration_sec": 3.0}})
-            steps.append({"name": "goto_position", "arguments": {"x": 2.0, "y": 0.0, "z": 2.0}})
+            z = self._extract_altitude_m(t, default=2.0)
+            steps.append({"name": "goto_position", "arguments": {"x": 2.0, "y": 0.0, "z": z}})
             steps.append({"name": "get_detections", "arguments": {}})
+            planned_action = True
         if any(w in t for w in ("pous", "land")):
             steps.append({"name": "land", "arguments": {}})
+            planned_action = True
+        if any(w in t for w in ("descer", "abaixar", "desce")):
+            z = self._extract_altitude_m(t, default=1.0)
+            pose = status.get("pose") or {}
+            cx = float(pose.get("x", 0.0))
+            cy = float(pose.get("y", 0.0))
+            steps.append({"name": "goto_position", "arguments": {"x": cx, "y": cy, "z": z}})
+            planned_action = True
+        if any(w in t for w in ("frente", "forward", "avanç")):
+            dist = self._extract_distance_m(t, default=2.0)
+            steps.append({"name": "goto_relative", "arguments": {"dx": dist, "dy": 0.0, "dz": 0.0}})
+            planned_action = True
+        if any(w in t for w in ("trás", "back", "voltar para trás")):
+            dist = self._extract_distance_m(t, default=2.0)
+            steps.append({"name": "goto_relative", "arguments": {"dx": -dist, "dy": 0.0, "dz": 0.0}})
+            planned_action = True
+        if any(w in t for w in ("esquerda", "left")):
+            deg = self._extract_degrees(t, default=30.0)
+            steps.append({"name": "rotate_yaw", "arguments": {"delta_deg": deg}})
+            planned_action = True
+        if any(w in t for w in ("direita", "right")):
+            deg = self._extract_degrees(t, default=30.0)
+            steps.append({"name": "rotate_yaw", "arguments": {"delta_deg": -deg}})
+            planned_action = True
+        if any(w in t for w in ("parar", "stop", "freeze", "fica parado")):
+            steps.append({"name": "hover", "arguments": {"duration_sec": 3.0}})
+            planned_action = True
+        if any(w in t for w in ("início", "home", "retornar ao", "return home", "volte ao")):
+            steps.append({"name": "return_home", "arguments": {}})
+            planned_action = True
+        if not planned_action:
+            steps.append(
+                {
+                    "name": "complete_task",
+                    "arguments": {
+                        "summary": (
+                            "Não entendi uma ação segura no modo heurístico. "
+                            "Comandos disponíveis: decolar, pousar, subir, descer, "
+                            "ir para frente, ir para trás, virar à esquerda, "
+                            "virar à direita, parar, retornar ao início."
+                        ),
+                        "success": False,
+                    },
+                }
+            )
+            return steps
         steps.append(
             {
                 "name": "complete_task",
@@ -57,6 +116,51 @@ class HeuristicPlanner:
                 }
             ]
         return steps
+
+    @staticmethod
+    def _extract_altitude_m(text: str, default: float) -> float:
+        text = text.replace(",", ".")
+
+        cm_match = re.search(r"(\d+(?:\.\d+)?)\s*(cm|centimetro|centímetros|centimetros)", text)
+        if cm_match:
+            return max(0.2, float(cm_match.group(1)) / 100.0)
+
+        m_match = re.search(r"(\d+(?:\.\d+)?)\s*(m|metro|metros)\b", text)
+        if m_match:
+            return max(0.2, float(m_match.group(1)))
+
+        bare_match = re.search(r"\b(\d+(?:\.\d+)?)\b", text)
+        if bare_match:
+            value = float(bare_match.group(1))
+            if value > 10.0 and ("solo" in text or "baixo" in text):
+                return max(0.2, value / 100.0)
+            return max(0.2, value)
+
+        return default
+
+    @staticmethod
+    def _extract_distance_m(text: str, default: float) -> float:
+        text = text.replace(",", ".")
+        m_match = re.search(r"(\d+(?:\.\d+)?)\s*(m|metro|metros)\b", text)
+        if m_match:
+            return max(0.5, float(m_match.group(1)))
+        bare_match = re.search(r"\b(\d+(?:\.\d+)?)\b", text)
+        if bare_match:
+            return max(0.5, float(bare_match.group(1)))
+        return default
+
+    @staticmethod
+    def _extract_degrees(text: str, default: float) -> float:
+        text = text.replace(",", ".")
+        deg_match = re.search(r"(\d+(?:\.\d+)?)\s*(graus|°|deg)", text)
+        if deg_match:
+            return max(5.0, float(deg_match.group(1)))
+        bare_match = re.search(r"\b(\d+(?:\.\d+)?)\b", text)
+        if bare_match:
+            val = float(bare_match.group(1))
+            if val <= 360.0:
+                return max(5.0, val)
+        return default
 
 
 class LvlmAgentNode(Node):
@@ -79,7 +183,7 @@ class LvlmAgentNode(Node):
 
         self.declare_parameter("rate_hz", 20.0)
         self.declare_parameter("search_radius_max", 10.0)
-        self.declare_parameter("pre_setpoints_sec", 8.0)
+        self.declare_parameter("pre_setpoints_sec", 2.0)
 
         task = str(self.get_parameter("task").value).strip()
         self._memory = AgentMemory(task=task)
@@ -133,6 +237,7 @@ class LvlmAgentNode(Node):
         if self._running:
             return
         self._memory.task = task
+        self._tools.reset_task_state()
         self._running = True
         thread = threading.Thread(target=self._run_mission, args=(task,), daemon=True)
         thread.start()

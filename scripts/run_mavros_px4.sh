@@ -9,7 +9,7 @@ FCU_URL=${1:-"udp://@127.0.0.1:18570"}
 GCS_URL=${2:-""}
 
 if [[ -n "${GCS_URL}" ]]; then
-  exec ros2 launch mavros px4.launch fcu_url:=${FCU_URL} gcs_url:=${GCS_URL}
+  exec ros2 launch mavros px4.launch fcu_url:=${FCU_URL} gcs_url:=${GCS_URL} use_sim_time:=false
 else
-  exec ros2 launch mavros px4.launch fcu_url:=${FCU_URL}
+  exec ros2 launch mavros px4.launch fcu_url:=${FCU_URL} use_sim_time:=false
 fi

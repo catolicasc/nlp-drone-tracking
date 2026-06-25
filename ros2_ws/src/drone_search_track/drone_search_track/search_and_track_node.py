@@ -73,7 +73,7 @@ class SearchAndTrackNode(Node):
 
         self.declare_parameter("rate_hz", 20.0)
         self.declare_parameter("takeoff_z", 5.0)
-        self.declare_parameter("pre_setpoints_sec", 2.5)
+        self.declare_parameter("pre_setpoints_sec", 2.0)
 
         self.declare_parameter("search_yaw_rate", 0.35)
         self.declare_parameter("track_kp", 0.6)

@@ -25,8 +25,15 @@ if [ -f "$PROJECT_ROOT/ros2_ws/install/setup.bash" ]; then
 fi
 set -u
 
+LISTEN_ONLY=0
 TASK="${1:-Decole 2 metros e procure pessoas na área.}"
-shift || true
+if [ "${1:-}" = "--listen" ]; then
+  LISTEN_ONLY=1
+  TASK=""
+  shift
+elif [ "$#" -gt 0 ]; then
+  shift
+fi
 
 HEURISTIC="${HEURISTIC_MODE:-0}"
 EXTRA_ARGS=()
@@ -35,7 +42,11 @@ if [ "$HEURISTIC" = "1" ] || [ "$HEURISTIC" = "true" ]; then
 fi
 
 echo "==> Oracle Vision: agente LVLM"
-echo "    Tarefa: $TASK"
+if [ "$LISTEN_ONLY" -eq 1 ]; then
+  echo "    Modo: aguardando tarefas em /drone_agent/task"
+else
+  echo "    Tarefa: $TASK"
+fi
 echo
 echo "Pré-requisitos:"
 echo "  A) ./scripts/iniciar_drone.sh"
@@ -49,7 +60,15 @@ if [ "$HEURISTIC" != "1" ] && [ "$HEURISTIC" != "true" ]; then
   fi
 fi
 
-exec ros2 run drone_agent lvlm_agent --ros-args \
-  -p "task:=${TASK}" \
-  "${EXTRA_ARGS[@]}" \
-  "$@"
+if [ "$LISTEN_ONLY" -eq 1 ]; then
+  exec ros2 run drone_agent lvlm_agent --ros-args \
+    -p use_sim_time:=false \
+    "${EXTRA_ARGS[@]}" \
+    "$@"
+else
+  exec ros2 run drone_agent lvlm_agent --ros-args \
+    -p "task:=${TASK}" \
+    -p use_sim_time:=false \
+    "${EXTRA_ARGS[@]}" \
+    "$@"
+fi
