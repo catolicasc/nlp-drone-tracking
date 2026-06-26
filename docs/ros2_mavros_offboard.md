@@ -107,6 +107,6 @@ ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: false}
 Veja os scripts em `scripts/`:
 
 - `run_mavros_px4.sh`
-- `arm_drone.sh`
-- `offboard_takeoff.sh`
-- `land_drone.sh`
+- `v2_start_mavros.sh`
+- `v2_agent.sh`
+- `v2_send_task.sh`

@@ -1,63 +1,36 @@
-# Oracle Vision
+# Oracle Vision V2
 
-Projeto versionável com:
-- Isaac Sim
-- Pegasus Simulator
-- PX4
-- ROS 2 (humble)
+Pipeline VLM-only para controlar um drone no Isaac Sim/Pegasus/PX4 via ROS 2 e MAVROS.
 
 ## Estrutura
 
-- `apps/isaac_app/standalone`: scripts principais do Isaac Sim
-- `apps/pegasus_app`: lógica ligada ao Pegasus
-- `ros2_ws`: workspace ROS 2
-- `config`: arquivos de configuração
-- `scripts`: scripts utilitários
-- `assets`: USD, mapas, URDFs
-- `tests`: testes simples
+- `apps/isaac_app/standalone`: simulação Isaac/Pegasus e publicação da câmera.
+- `config/sim.yaml`: mundo, drone, câmera e pessoas da simulação.
+- `ros2_ws/src/v2_vlm_drone`: agente V2 VLM-only.
+- `scripts/v2_*.sh`: wrappers operacionais da V2.
+- `docs/v2_*.md`: documentação da V2.
 
-## Como usar
+## Quickstart
 
-### 1. Criar o projeto
-Esse projeto já foi gerado com o script de scaffold.
-
-### 2. Ajustar o .env
-Copie o exemplo:
+Configure `.env` a partir de `.env.example`, depois siga:
 
 ```bash
-cp .env.example .env
+docs/v2_quickstart.md
 ```
 
-Edite os caminhos conforme sua máquina.
+Fluxo principal:
 
-### 3. Rodar ROS 2
 ```bash
-./scripts/run_ros.sh
+./scripts/v2_start_sim.sh
+./scripts/v2_start_mavros.sh
+./scripts/v2_agent.sh
+./scripts/v2_status.sh doctor
+./scripts/v2_send_task.sh "decole 1 metro, procure pessoas e me avise quando encontrar"
 ```
 
-### 4. Rodar Isaac Sim
-```bash
-./scripts/run_isaac.sh
-```
+## Documentação
 
-## Armar e voar via ROS2 (MAVROS)
-
-Este projeto suporta controlar o PX4 via MAVLink usando o MAVROS.
-
-Documentação completa:
-
-- `docs/ros2_mavros_offboard.md`
-
-Scripts utilitários:
-
-- `scripts/run_mavros_px4.sh`
-- `scripts/arm_drone.sh`
-- `scripts/offboard_takeoff.sh`
-- `scripts/land_drone.sh`
-
-## Agente LVLM (ARNA-style)
-
-Orquestra percepção + navegação com linguagem natural:
-
-- `docs/lvlm_agent.md`
-- `scripts/run_lvlm_agent.sh`
+- `docs/v2_architecture.md`
+- `docs/v2_camera.md`
+- `docs/v2_commands.md`
+- `docs/v2_quickstart.md`
