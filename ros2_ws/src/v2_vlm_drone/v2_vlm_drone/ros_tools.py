@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import math
+import struct
 import time
+import zlib
 from typing import Any, Callable
 
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -36,6 +39,83 @@ def yaw_from_quaternion(q: Quaternion) -> float:
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    crc = binascii.crc32(kind + payload) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+
+def _rgb_bytes_from_image(msg: Image) -> bytes:
+    encoding = (msg.encoding or "").lower()
+    width = int(msg.width)
+    height = int(msg.height)
+    step = int(msg.step)
+    data = bytes(msg.data)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"dimensões inválidas: width={width} height={height}")
+
+    if encoding in ("rgb8", "8uc3"):
+        channels = 3
+        mode = "rgb"
+    elif encoding == "bgr8":
+        channels = 3
+        mode = "bgr"
+    elif encoding in ("rgba8", "8uc4"):
+        channels = 4
+        mode = "rgba"
+    elif encoding == "bgra8":
+        channels = 4
+        mode = "bgra"
+    elif encoding in ("mono8", "8uc1"):
+        channels = 1
+        mode = "mono"
+    elif not encoding and step % width == 0 and step // width in (3, 4):
+        channels = step // width
+        mode = "rgb" if channels == 3 else "rgba"
+    else:
+        raise ValueError(
+            f"encoding não suportado: {msg.encoding!r}, width={width}, height={height}, step={step}"
+        )
+
+    min_step = width * channels
+    if step < min_step:
+        raise ValueError(f"step inválido: step={step}, mínimo esperado={min_step}")
+    if len(data) < step * height:
+        raise ValueError(f"imagem incompleta: bytes={len(data)}, esperado={step * height}")
+
+    rows: list[bytes] = []
+    for row_idx in range(height):
+        start = row_idx * step
+        raw = data[start : start + min_step]
+        if mode == "rgb":
+            rows.append(raw)
+        elif mode == "bgr":
+            rows.append(bytes(v for i in range(0, len(raw), 3) for v in (raw[i + 2], raw[i + 1], raw[i])))
+        elif mode == "rgba":
+            rows.append(bytes(v for i in range(0, len(raw), 4) for v in (raw[i], raw[i + 1], raw[i + 2])))
+        elif mode == "bgra":
+            rows.append(bytes(v for i in range(0, len(raw), 4) for v in (raw[i + 2], raw[i + 1], raw[i])))
+        else:
+            rows.append(bytes(v for px in raw for v in (px, px, px)))
+    return b"".join(rows)
+
+
+def _png_data_url_from_image(msg: Image) -> str:
+    width = int(msg.width)
+    height = int(msg.height)
+    rgb = _rgb_bytes_from_image(msg)
+    scanlines = b"".join(
+        b"\x00" + rgb[row * width * 3 : (row + 1) * width * 3]
+        for row in range(height)
+    )
+    payload = (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(scanlines))
+        + _png_chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
 
 
 class V2RosTools:
@@ -93,6 +173,7 @@ class V2RosTools:
         self._handlers: dict[str, Callable[[dict[str, Any]], str]] = {
             "get_drone_status": lambda _: self.get_drone_status(),
             "inspect_camera": self.inspect_camera,
+            "scan_for_people": self.scan_for_people,
             "takeoff": self.takeoff,
             "goto_position": self.goto_position,
             "goto_relative": self.goto_relative,
@@ -261,25 +342,22 @@ class V2RosTools:
     def get_drone_status(self) -> str:
         return json.dumps({"ok": True, **self._state_snapshot(), "limits": self._diagnostics()["limits"]}, ensure_ascii=False)
 
-    def inspect_camera(self, args: dict[str, Any]) -> str:
-        question = str(args.get("question", "Descreva a cena atual da câmera do drone."))
+    def _inspect_image(self, question: str) -> dict[str, Any]:
         if self._last_image is None:
-            return json.dumps({"ok": False, "error": "sem imagem em /drone/camera/image_raw"}, ensure_ascii=False)
+            return {"ok": False, "error": "sem imagem em /drone/camera/image_raw"}
         try:
-            from cv_bridge import CvBridge
-            import cv2
-        except ImportError:
-            return json.dumps({"ok": False, "error": "cv_bridge/opencv indisponível"}, ensure_ascii=False)
-
-        try:
-            image = CvBridge().imgmsg_to_cv2(self._last_image, desired_encoding="bgr8")
-            ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            data_url = _png_data_url_from_image(self._last_image)
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"ok": False, "error": f"falha ao converter imagem: {exc}"}, ensure_ascii=False)
-        if not ok:
-            return json.dumps({"ok": False, "error": "falha ao codificar JPEG"}, ensure_ascii=False)
-
-        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+            return {
+                "ok": False,
+                "error": f"falha ao converter imagem ROS para PNG: {exc}",
+                "image": {
+                    "encoding": self._last_image.encoding,
+                    "width": int(self._last_image.width),
+                    "height": int(self._last_image.height),
+                    "step": int(self._last_image.step),
+                },
+            }
         messages = [
             {
                 "role": "user",
@@ -292,7 +370,94 @@ class V2RosTools:
         response = self._vlm.chat(messages, temperature=0.1)
         answer = self._vlm.assistant_message(response).get("content", "") or ""
         self._memory.add_finding(f"camera: {answer[:300]}")
-        return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
+        return {"ok": True, "answer": answer}
+
+    def inspect_camera(self, args: dict[str, Any]) -> str:
+        question = str(args.get("question", "Descreva a cena atual da câmera do drone."))
+        return json.dumps(self._inspect_image(question), ensure_ascii=False)
+
+    @staticmethod
+    def _parse_person_detection(answer: str) -> dict[str, Any]:
+        text = answer.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return {
+                    "found": bool(parsed.get("found", False)),
+                    "confidence": parsed.get("confidence", "unknown"),
+                    "description": str(parsed.get("description", "")),
+                }
+        except json.JSONDecodeError:
+            pass
+        low = answer.lower()
+        negative = any(term in low for term in ("não vejo", "nao vejo", "não há", "nao ha", "sem pessoa", "no person"))
+        positive = any(term in low for term in ("pessoa", "person", "humano", "human"))
+        return {"found": bool(positive and not negative), "confidence": "unknown", "description": answer[:500]}
+
+    def scan_for_people(self, args: dict[str, Any]) -> str:
+        if not (self._have_state and self._state.armed and self._state.mode == "OFFBOARD"):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "scan_for_people exige drone armado em OFFBOARD; use takeoff antes.",
+                    "diagnostics": self._diagnostics(),
+                },
+                ensure_ascii=False,
+            )
+
+        sweeps = int(clamp(float(args.get("sweeps", 1)), 1.0, 3.0))
+        step_deg = clamp(float(args.get("step_deg", 45.0)), 15.0, 120.0)
+        settle_sec = clamp(float(args.get("settle_sec", 1.0)), 0.2, 5.0)
+        stop_on_found = bool(args.get("stop_on_found", True))
+        total_steps = max(1, int(round((360.0 / step_deg) * sweeps)))
+        observations: list[dict[str, Any]] = []
+
+        question = (
+            "Analise esta imagem da câmera do drone e responda somente JSON válido, sem markdown, "
+            'no formato {"found": boolean, "confidence": "low|medium|high", '
+            '"description": "descrição curta em português"}. '
+            "Marque found=true apenas se houver uma pessoa/humano visível."
+        )
+
+        for idx in range(total_steps):
+            if idx > 0:
+                self._cmd_yaw += math.radians(step_deg)
+                self._stream_setpoints = True
+                self._wait(settle_sec)
+            result = self._inspect_image(question)
+            if not result.get("ok"):
+                observations.append({"step": idx + 1, "ok": False, "error": result.get("error")})
+                continue
+            detection = self._parse_person_detection(str(result.get("answer", "")))
+            observation = {
+                "step": idx + 1,
+                "yaw_deg": round(math.degrees(self._cmd_yaw), 1),
+                **detection,
+            }
+            observations.append(observation)
+            if detection["found"]:
+                self._memory.add_finding(
+                    f"Pessoa encontrada no passo {idx + 1}, yaw={observation['yaw_deg']} deg: "
+                    f"{detection['description']}"
+                )
+                if stop_on_found:
+                    break
+
+        found_items = [item for item in observations if item.get("found")]
+        return json.dumps(
+            {
+                "ok": True,
+                "found": bool(found_items),
+                "first_match": found_items[0] if found_items else None,
+                "observations": observations,
+                "steps_completed": len(observations),
+            },
+            ensure_ascii=False,
+        )
 
     def takeoff(self, args: dict[str, Any]) -> str:
         if not self._connected():

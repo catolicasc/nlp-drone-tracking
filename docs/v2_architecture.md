@@ -17,6 +17,7 @@ flowchart LR
     subgraph tools [Tools V2]
         StatusTool["get_drone_status"]
         CameraTool["inspect_camera"]
+        PeopleTool["scan_for_people"]
         TakeoffTool["takeoff"]
         GotoTool["goto_position / goto_relative"]
         YawTool["set_yaw / rotate_yaw"]
@@ -38,6 +39,8 @@ flowchart LR
     StatusTool --> MavrosState
     StatusTool --> MavrosPose
     CameraTool --> CameraTopic
+    PeopleTool --> CameraTopic
+    PeopleTool --> MavrosSetpoint
     TakeoffTool --> MavrosSetpoint
     TakeoffTool --> MavrosServices
     GotoTool --> MavrosSetpoint
@@ -55,7 +58,7 @@ flowchart LR
 - `v2_vlm_drone`: pacote ROS 2 novo e isolado.
 - `v2_vlm_agent`: nó principal, assina `/v2/task` e publica `/v2/status`.
 - `VlmClient`: cliente HTTP OpenAI-compatible para OpenAI, OpenRouter, Ollama ou outro endpoint compatível.
-- `V2RosTools`: tools determinísticas para status, câmera, decolagem, movimento, yaw, hover, pouso e encerramento.
+- `V2RosTools`: tools determinísticas para status, câmera, busca de pessoas, decolagem, movimento, yaw, hover, pouso e encerramento.
 - `V2Memory`: memória curta da missão com home pose, ações recentes e achados visuais.
 
 ## Limites

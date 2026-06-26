@@ -20,11 +20,25 @@ px4:
 sensors:
   camera:
     enabled: true
-    width: 1280
-    height: 720
-    position: [0.1701, 0.01521, -0.01314]
-    orientation_rpy_deg: [0.0, -35.0, 0.0]
-    publish_depth: true
+    namespace: drone/camera
+    topic: image_raw
+    info_topic: camera_info
+    frame_id: drone_camera
+    width: 960
+    height: 540
+    frequency: 15
+    # Perfil limpo V2: câmera frontal no nariz, levemente acima do centro,
+    # apontando para frente do drone e inclinada para baixo.
+    position: [0.22, 0.0, 0.06]
+    orientation_mode: forward_down
+    pitch_down_deg: 25.0
+    focal_length_mm: 18.0
+    horizontal_aperture_mm: 20.955
+    vertical_aperture_mm: 11.785
+    clipping_range_m: [0.05, 200.0]
+    focus_distance_m: 10.0
+    visualize: true
+    publish_depth: false
     depth_topic: depth
     depth_type: depth
     publish_realsense_compat: true

@@ -20,6 +20,8 @@ LVLM_API_KEY=ollama
 LVLM_MODEL=qwen2.5vl:latest
 ```
 
+Alguns modelos do Ollama, como `qwen2.5vl:7b`, não suportam OpenAI `tools` nativas. Nesse caso o agente V2 muda automaticamente para `tool_mode=json`: a VLM escolhe a tool retornando JSON, e o agente executa a tool do mesmo jeito.
+
 ## 2. Build
 
 ```bash

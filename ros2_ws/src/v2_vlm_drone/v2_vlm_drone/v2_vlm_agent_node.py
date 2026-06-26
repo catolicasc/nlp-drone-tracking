@@ -13,7 +13,7 @@ from std_msgs.msg import String
 
 from .memory import V2Memory
 from .ros_tools import V2RosTools
-from .tool_defs import SYSTEM_PROMPT, tool_schemas
+from .tool_defs import SYSTEM_PROMPT, json_tool_protocol_prompt, tool_schemas
 from .vlm_client import VlmClient, VlmClientError
 
 
@@ -56,6 +56,7 @@ class V2VlmAgentNode(Node):
         self._lock = threading.Lock()
         self._busy = False
         self._thread: threading.Thread | None = None
+        self._native_tools_supported = True
         self.create_subscription(
             String,
             self.get_parameter("task_topic").get_parameter_value().string_value,
@@ -115,11 +116,11 @@ class V2VlmAgentNode(Node):
             max_steps = int(self.get_parameter("max_steps").value)
             for step in range(1, max_steps + 1):
                 self._publish_status({"event": "vlm_step", "step": step, "max_steps": max_steps})
-                response = self._vlm.chat(messages, tools=tool_schemas())
+                response = self._chat_for_next_tool(messages)
                 assistant = self._vlm.assistant_message(response)
                 messages.append(assistant)
 
-                tool_calls = assistant.get("tool_calls") or []
+                tool_calls = self._extract_tool_calls(assistant)
                 if not tool_calls:
                     content = assistant.get("content") or ""
                     self._publish_status(
@@ -142,14 +143,22 @@ class V2VlmAgentNode(Node):
                     else:
                         result = self._tools.execute(name, args)
                     self._publish_status({"event": "tool_result", "tool": name, "result": result})
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.get("id", name),
-                            "name": name,
-                            "content": result,
-                        }
-                    )
+                    if self._native_tools_supported:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.get("id", name),
+                                "name": name,
+                                "content": result,
+                            }
+                        )
+                    else:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"Resultado da tool {name}: {result}\nEscolha a próxima tool em JSON.",
+                            }
+                        )
                     if self._tools.task_done:
                         self._publish_status({"event": "finished", **(self._tools.task_result or {})})
                         return
@@ -167,6 +176,79 @@ class V2VlmAgentNode(Node):
         finally:
             with self._lock:
                 self._busy = False
+
+    @staticmethod
+    def _tools_not_supported(exc: VlmClientError) -> bool:
+        text = str(exc).lower()
+        return "does not support tools" in text or "tools are not supported" in text
+
+    def _chat_for_next_tool(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        if self._native_tools_supported:
+            try:
+                return self._vlm.chat(messages, tools=tool_schemas())
+            except VlmClientError as exc:
+                if not self._tools_not_supported(exc):
+                    raise
+                self._native_tools_supported = False
+                self._publish_status(
+                    {
+                        "event": "tool_mode",
+                        "mode": "json",
+                        "reason": "modelo local não suporta OpenAI tools nativas",
+                    }
+                )
+        json_messages = messages + [{"role": "system", "content": json_tool_protocol_prompt()}]
+        return self._vlm.chat(json_messages)
+
+    @staticmethod
+    def _json_from_content(content: str) -> dict[str, Any] | None:
+        text = content.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _extract_tool_calls(self, assistant: dict[str, Any]) -> list[dict[str, Any]]:
+        native_calls = assistant.get("tool_calls") or []
+        if native_calls:
+            return native_calls
+
+        parsed = self._json_from_content(str(assistant.get("content") or ""))
+        if not parsed:
+            return []
+        raw_calls = parsed.get("tool_calls")
+        if raw_calls is None and "tool" in parsed:
+            raw_calls = [parsed]
+        if not isinstance(raw_calls, list):
+            return []
+
+        calls: list[dict[str, Any]] = []
+        for idx, raw in enumerate(raw_calls):
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("tool") or raw.get("name") or "")
+            args = raw.get("arguments") or raw.get("args") or {}
+            if not name:
+                continue
+            calls.append(
+                {
+                    "id": f"json_tool_{idx}",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args if isinstance(args, dict) else {}, ensure_ascii=False),
+                    },
+                }
+            )
+        return calls
 
 
 def main(args: list[str] | None = None) -> None:

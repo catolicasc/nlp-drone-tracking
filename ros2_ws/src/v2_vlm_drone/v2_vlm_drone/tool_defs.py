@@ -17,9 +17,29 @@ Regras de segurança:
 - Use takeoff antes de movimentos se o drone estiver desarmado.
 - Respeite altitude e raio máximos retornados por get_drone_status.
 - land é sempre permitido.
-- Para tarefas visuais, use inspect_camera.
+- Para tarefas visuais simples, use inspect_camera.
+- Para procurar pessoas, use scan_for_people depois de decolar.
 - Termine toda tarefa com complete_task.
 """
+
+
+def json_tool_protocol_prompt() -> str:
+    tools = [
+        {
+            "name": item["function"]["name"],
+            "description": item["function"]["description"],
+            "parameters": item["function"]["parameters"],
+        }
+        for item in tool_schemas()
+    ]
+    return (
+        "O servidor local não suporta OpenAI tools nativas. Mesmo assim, você deve escolher tools.\n"
+        "Responda somente JSON válido, sem markdown e sem texto extra, em um destes formatos:\n"
+        '{"tool": "nome_da_tool", "arguments": {...}}\n'
+        'ou {"tool_calls": [{"tool": "nome_da_tool", "arguments": {...}}]}.\n'
+        "Use exatamente uma ou mais tools da lista abaixo. Quando terminar, chame complete_task.\n\n"
+        f"Tools disponíveis:\n{tools}"
+    )
 
 
 def tool_schemas() -> list[dict[str, Any]]:
@@ -46,6 +66,38 @@ def tool_schemas() -> list[dict[str, Any]]:
                         }
                     },
                     "required": ["question"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_for_people",
+                "description": (
+                    "Procura pessoas girando o drone em etapas e analisando a câmera com o VLM. "
+                    "Retorna found=true quando uma pessoa for vista."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sweeps": {
+                            "type": "integer",
+                            "description": "Número de voltas completas de varredura.",
+                        },
+                        "step_deg": {
+                            "type": "number",
+                            "description": "Graus por etapa de yaw. Use 45 ou 60 para busca rápida.",
+                        },
+                        "settle_sec": {
+                            "type": "number",
+                            "description": "Tempo de espera após cada giro antes de analisar a câmera.",
+                        },
+                        "stop_on_found": {
+                            "type": "boolean",
+                            "description": "Se true, encerra a varredura assim que encontrar pessoa.",
+                        },
+                    },
                     "additionalProperties": False,
                 },
             },

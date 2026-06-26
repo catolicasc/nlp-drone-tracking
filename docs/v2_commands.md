@@ -29,9 +29,19 @@ A V2 recebe linguagem natural em `/v2/task`. O VLM decide quais tools chamar, en
 
 `inspect_camera` usa o último frame de `/drone/camera/image_raw` e envia a imagem ao mesmo endpoint VLM configurado.
 
+## Busca de pessoas
+
+```bash
+./scripts/v2_send_task.sh "decole 1 metro, procure pessoas girando a câmera e me avise quando encontrar"
+./scripts/v2_send_task.sh "suba 1 metro, faça uma varredura de 360 graus procurando pessoas e pouse"
+```
+
+Para essa missão, o agente deve usar `scan_for_people`. A tool gira o drone em etapas, analisa cada frame com a VLM e retorna `found=true` quando identificar uma pessoa.
+
 ## Segurança
 
 - Movimentos exigem MAVROS conectado.
+- `scan_for_people` exige drone armado em `OFFBOARD`; peça para decolar antes da busca.
 - `takeoff` limita altitude pelos parâmetros ROS `min_alt_m` e `max_alt_m`.
 - `goto_position` e `goto_relative` limitam distância pelo parâmetro ROS `max_radius_m`.
 - `land`, `pouse`, `stop` e similares podem interromper uma missão em andamento.
