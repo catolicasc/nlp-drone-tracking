@@ -62,12 +62,34 @@ não é afetada.
 
 ## 4. Analisar os resultados
 
+### Resumo rápido (SQL, sem dependências)
+
 ```bash
 python3 experiments/metrics.py --db postgresql://v2:v2@localhost:5432/v2_experiments
 ```
 
 Imprime por `experiment_id`: taxa de conclusão, nº de passos, falhas por tipo e
 tempo de missão, em tabela Markdown pronta para o artigo.
+
+### Análise rica com pandas (gráficos)
+
+Para exploração interativa e gráficos (taxa de sucesso, distribuição de passos)
+que entram na seção Experiments do artigo:
+
+```bash
+pip install pandas matplotlib seaborn "psycopg[binary]" jupyter
+jupyter notebook experiments/analyze.ipynb
+```
+
+O notebook lê direto do Postgres via `pandas.read_sql()`, agrupa os eventos em
+missões e gera:
+
+- `experiments/outputs/taxa_sucesso.png` — taxa de sucesso por experimento
+- `experiments/outputs/passos_missao.png` — histograma + boxplot de passos
+- tabela resumo (com `to_latex()` pronto para o artigo)
+
+Os PNGs em `outputs/` alimentam as figuras da seção Experiments; a tabela
+resumo alimenta o `% TODO(evidência)` do abstract.
 
 ## 5. Consultas SQL úteis
 
