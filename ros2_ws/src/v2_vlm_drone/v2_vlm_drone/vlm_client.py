@@ -57,6 +57,12 @@ class VlmClient:
     def api_base(self) -> str:
         return self.config.api_base
 
+    @property
+    def chat_completions_url(self) -> str:
+        if self.config.api_base.endswith("/chat/completions"):
+            return self.config.api_base
+        return f"{self.config.api_base}/chat/completions"
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -74,7 +80,7 @@ class VlmClient:
             body["tool_choice"] = "auto"
 
         req = urllib.request.Request(
-            f"{self.config.api_base}/chat/completions",
+            self.chat_completions_url,
             data=json.dumps(body).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",

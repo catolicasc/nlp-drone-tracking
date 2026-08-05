@@ -18,7 +18,8 @@ Regras de segurança:
 - Respeite altitude e raio máximos retornados por get_drone_status.
 - land é sempre permitido.
 - Para tarefas visuais simples, use inspect_camera.
-- Para procurar pessoas, use scan_for_people depois de decolar.
+- Para detectar pessoa no frame atual, use detect_person_in_frame (YOLO local + confirmação VLM opcional).
+- Para procurar pessoas girando o drone, use scan_for_people depois de decolar.
 - Termine toda tarefa com complete_task.
 """
 
@@ -73,10 +74,30 @@ def tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "detect_person_in_frame",
+                "description": (
+                    "Detecta pessoas no frame atual com YOLO. Se houver candidato, pode confirmar com VLM "
+                    "e salvar evidência em runs/search_evidence."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "confirm_vlm": {
+                            "type": "boolean",
+                            "description": "Se true, confirma candidatos YOLO com VLM antes de marcar found.",
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "scan_for_people",
                 "description": (
-                    "Procura pessoas girando o drone em etapas e analisando a câmera com o VLM. "
-                    "Retorna found=true quando uma pessoa for vista."
+                    "Procura pessoas girando o drone em etapas. Usa YOLO em cada frame e confirma com VLM "
+                    "somente quando houver candidato. Retorna found=true quando uma pessoa for confirmada."
                 ),
                 "parameters": {
                     "type": "object",
@@ -96,6 +117,10 @@ def tool_schemas() -> list[dict[str, Any]]:
                         "stop_on_found": {
                             "type": "boolean",
                             "description": "Se true, encerra a varredura assim que encontrar pessoa.",
+                        },
+                        "confirm_vlm": {
+                            "type": "boolean",
+                            "description": "Se true, confirma detecções YOLO com VLM.",
                         },
                     },
                     "additionalProperties": False,

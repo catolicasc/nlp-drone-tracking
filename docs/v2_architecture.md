@@ -17,6 +17,7 @@ flowchart LR
     subgraph tools [Tools V2]
         StatusTool["get_drone_status"]
         CameraTool["inspect_camera"]
+        YoloTool["detect_person_in_frame"]
         PeopleTool["scan_for_people"]
         TakeoffTool["takeoff"]
         GotoTool["goto_position / goto_relative"]
@@ -39,7 +40,11 @@ flowchart LR
     StatusTool --> MavrosState
     StatusTool --> MavrosPose
     CameraTool --> CameraTopic
+    YoloTool --> CameraTopic
     PeopleTool --> CameraTopic
+    YoloTool --> Yolo["YOLO local<br/>classe person"]
+    PeopleTool --> Yolo
+    PeopleTool --> VlmConfirm["VLM confirma<br/>candidatos"]
     PeopleTool --> MavrosSetpoint
     TakeoffTool --> MavrosSetpoint
     TakeoffTool --> MavrosServices
@@ -58,7 +63,8 @@ flowchart LR
 - `v2_vlm_drone`: pacote ROS 2 novo e isolado.
 - `v2_vlm_agent`: nó principal, assina `/v2/task` e publica `/v2/status`.
 - `VlmClient`: cliente HTTP OpenAI-compatible para OpenAI, OpenRouter, Ollama ou outro endpoint compatível.
-- `V2RosTools`: tools determinísticas para status, câmera, busca de pessoas, decolagem, movimento, yaw, hover, pouso e encerramento.
+- `V2RosTools`: tools determinísticas para status, câmera, detecção YOLO de pessoas, busca, decolagem, movimento, yaw, hover, pouso e encerramento.
+- `YoloPersonDetector`: detector local Ultralytics YOLO (classe `person`).
 - `V2Memory`: memória curta da missão com home pose, ações recentes e achados visuais.
 
 ## Limites

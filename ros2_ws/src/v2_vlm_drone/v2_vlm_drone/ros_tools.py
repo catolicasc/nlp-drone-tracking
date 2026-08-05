@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import math
-import struct
+import os
 import time
-import zlib
+from pathlib import Path
 from typing import Any, Callable
 
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -18,8 +16,11 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
+from .evidence import save_search_evidence
+from .image_utils import png_data_url_from_image
 from .memory import V2Memory
 from .vlm_client import VlmClient
+from .yolo_detector import YoloPersonDetector
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
@@ -39,83 +40,6 @@ def yaw_from_quaternion(q: Quaternion) -> float:
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
-
-
-def _png_chunk(kind: bytes, payload: bytes) -> bytes:
-    crc = binascii.crc32(kind + payload) & 0xFFFFFFFF
-    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
-
-
-def _rgb_bytes_from_image(msg: Image) -> bytes:
-    encoding = (msg.encoding or "").lower()
-    width = int(msg.width)
-    height = int(msg.height)
-    step = int(msg.step)
-    data = bytes(msg.data)
-    if width <= 0 or height <= 0:
-        raise ValueError(f"dimensões inválidas: width={width} height={height}")
-
-    if encoding in ("rgb8", "8uc3"):
-        channels = 3
-        mode = "rgb"
-    elif encoding == "bgr8":
-        channels = 3
-        mode = "bgr"
-    elif encoding in ("rgba8", "8uc4"):
-        channels = 4
-        mode = "rgba"
-    elif encoding == "bgra8":
-        channels = 4
-        mode = "bgra"
-    elif encoding in ("mono8", "8uc1"):
-        channels = 1
-        mode = "mono"
-    elif not encoding and step % width == 0 and step // width in (3, 4):
-        channels = step // width
-        mode = "rgb" if channels == 3 else "rgba"
-    else:
-        raise ValueError(
-            f"encoding não suportado: {msg.encoding!r}, width={width}, height={height}, step={step}"
-        )
-
-    min_step = width * channels
-    if step < min_step:
-        raise ValueError(f"step inválido: step={step}, mínimo esperado={min_step}")
-    if len(data) < step * height:
-        raise ValueError(f"imagem incompleta: bytes={len(data)}, esperado={step * height}")
-
-    rows: list[bytes] = []
-    for row_idx in range(height):
-        start = row_idx * step
-        raw = data[start : start + min_step]
-        if mode == "rgb":
-            rows.append(raw)
-        elif mode == "bgr":
-            rows.append(bytes(v for i in range(0, len(raw), 3) for v in (raw[i + 2], raw[i + 1], raw[i])))
-        elif mode == "rgba":
-            rows.append(bytes(v for i in range(0, len(raw), 4) for v in (raw[i], raw[i + 1], raw[i + 2])))
-        elif mode == "bgra":
-            rows.append(bytes(v for i in range(0, len(raw), 4) for v in (raw[i + 2], raw[i + 1], raw[i])))
-        else:
-            rows.append(bytes(v for px in raw for v in (px, px, px)))
-    return b"".join(rows)
-
-
-def _png_data_url_from_image(msg: Image) -> str:
-    width = int(msg.width)
-    height = int(msg.height)
-    rgb = _rgb_bytes_from_image(msg)
-    scanlines = b"".join(
-        b"\x00" + rgb[row * width * 3 : (row + 1) * width * 3]
-        for row in range(height)
-    )
-    payload = (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(scanlines))
-        + _png_chunk(b"IEND", b"")
-    )
-    return "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
 
 
 class V2RosTools:
@@ -155,6 +79,12 @@ class V2RosTools:
         self._stream_setpoints = False
         self._task_done = False
         self._task_result: dict[str, Any] | None = None
+        self._yolo: YoloPersonDetector | None = None
+        self._yolo_model = os.environ.get("YOLO_MODEL", "yolov8n.pt")
+        self._yolo_conf = float(os.environ.get("YOLO_CONF", "0.35"))
+        self._yolo_confirm_vlm = os.environ.get("YOLO_CONFIRM_VLM", "true").lower() in ("1", "true", "yes")
+        self._yolo_save_evidence = os.environ.get("YOLO_SAVE_EVIDENCE", "true").lower() in ("1", "true", "yes")
+        self._evidence_dir = Path(os.environ.get("YOLO_EVIDENCE_DIR", "./runs/search_evidence")).resolve()
 
         self._setpoint_pub = node.create_publisher(PoseStamped, "/mavros/setpoint_position/local", 10)
         self._timer = node.create_timer(1.0 / self._rate_hz, self._publish_setpoint)
@@ -173,6 +103,7 @@ class V2RosTools:
         self._handlers: dict[str, Callable[[dict[str, Any]], str]] = {
             "get_drone_status": lambda _: self.get_drone_status(),
             "inspect_camera": self.inspect_camera,
+            "detect_person_in_frame": self.detect_person_in_frame,
             "scan_for_people": self.scan_for_people,
             "takeoff": self.takeoff,
             "goto_position": self.goto_position,
@@ -342,11 +273,49 @@ class V2RosTools:
     def get_drone_status(self) -> str:
         return json.dumps({"ok": True, **self._state_snapshot(), "limits": self._diagnostics()["limits"]}, ensure_ascii=False)
 
+    def _get_yolo(self) -> YoloPersonDetector:
+        if self._yolo is None:
+            self._yolo = YoloPersonDetector(self._yolo_model, conf=self._yolo_conf)
+        return self._yolo
+
+    def _pose_metadata(self) -> dict[str, Any]:
+        x, y, z, yaw = self._current_pose()
+        return {
+            "pose": {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3), "yaw_deg": round(math.degrees(yaw), 1)},
+            "setpoint_yaw_deg": round(math.degrees(self._cmd_yaw), 1),
+        }
+
+    def _run_yolo_detection(self) -> dict[str, Any]:
+        if self._last_image is None:
+            return {"ok": False, "error": "sem imagem em /drone/camera/image_raw"}
+        try:
+            return self._get_yolo().detect(self._last_image)
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _vlm_person_confirmation(self) -> dict[str, Any]:
+        question = (
+            "Analise esta imagem de busca e resgate. Responda somente JSON válido, sem markdown, "
+            'no formato {"found": boolean, "confidence": "low|medium|high", '
+            '"description": "descrição curta em português"}. '
+            "Marque found=true apenas se houver pessoa ou vítima visível em situação de risco."
+        )
+        result = self._inspect_image(question)
+        if not result.get("ok"):
+            return result
+        parsed = self._parse_person_detection(str(result.get("answer", "")))
+        return {"ok": True, **parsed, "raw_answer": result.get("answer", "")}
+
+    def _maybe_save_evidence(self, metadata: dict[str, Any], *, label: str) -> dict[str, str] | None:
+        if not self._yolo_save_evidence or self._last_image is None:
+            return None
+        return save_search_evidence(self._last_image, metadata, base_dir=self._evidence_dir, label=label)
+
     def _inspect_image(self, question: str) -> dict[str, Any]:
         if self._last_image is None:
             return {"ok": False, "error": "sem imagem em /drone/camera/image_raw"}
         try:
-            data_url = _png_data_url_from_image(self._last_image)
+            data_url = png_data_url_from_image(self._last_image)
         except Exception as exc:  # noqa: BLE001
             return {
                 "ok": False,
@@ -375,6 +344,44 @@ class V2RosTools:
     def inspect_camera(self, args: dict[str, Any]) -> str:
         question = str(args.get("question", "Descreva a cena atual da câmera do drone."))
         return json.dumps(self._inspect_image(question), ensure_ascii=False)
+
+    def detect_person_in_frame(self, args: dict[str, Any]) -> str:
+        confirm_vlm = bool(args.get("confirm_vlm", self._yolo_confirm_vlm))
+        yolo = self._run_yolo_detection()
+        if not yolo.get("ok"):
+            return json.dumps(yolo, ensure_ascii=False)
+
+        payload: dict[str, Any] = {
+            "ok": True,
+            "found": bool(yolo.get("found")),
+            "yolo": yolo,
+            **self._pose_metadata(),
+        }
+        if not yolo.get("found"):
+            payload["vlm_confirmed"] = False
+            return json.dumps(payload, ensure_ascii=False)
+
+        if confirm_vlm:
+            vlm = self._vlm_person_confirmation()
+            payload["vlm"] = vlm
+            payload["vlm_confirmed"] = bool(vlm.get("ok") and vlm.get("found"))
+            payload["found"] = bool(payload["vlm_confirmed"])
+            payload["confidence"] = vlm.get("confidence", "unknown")
+            payload["description"] = vlm.get("description", "")
+        else:
+            best = yolo.get("best") or {}
+            payload["vlm_confirmed"] = False
+            payload["confidence"] = "high" if float(best.get("confidence", 0)) >= 0.7 else "medium"
+            payload["description"] = f"YOLO detectou {yolo.get('count', 0)} pessoa(s)"
+
+        if payload["found"]:
+            evidence = self._maybe_save_evidence({**payload, "event": "person_found"}, label="person_found")
+            if evidence:
+                payload["evidence"] = evidence
+            self._memory.add_finding(
+                f"Pessoa detectada (YOLO): {payload.get('description', '')[:200]}"
+            )
+        return json.dumps(payload, ensure_ascii=False)
 
     @staticmethod
     def _parse_person_detection(answer: str) -> dict[str, Any]:
@@ -413,36 +420,54 @@ class V2RosTools:
         step_deg = clamp(float(args.get("step_deg", 45.0)), 15.0, 120.0)
         settle_sec = clamp(float(args.get("settle_sec", 1.0)), 0.2, 5.0)
         stop_on_found = bool(args.get("stop_on_found", True))
+        confirm_vlm = bool(args.get("confirm_vlm", self._yolo_confirm_vlm))
         total_steps = max(1, int(round((360.0 / step_deg) * sweeps)))
         observations: list[dict[str, Any]] = []
-
-        question = (
-            "Analise esta imagem da câmera do drone e responda somente JSON válido, sem markdown, "
-            'no formato {"found": boolean, "confidence": "low|medium|high", '
-            '"description": "descrição curta em português"}. '
-            "Marque found=true apenas se houver uma pessoa/humano visível."
-        )
 
         for idx in range(total_steps):
             if idx > 0:
                 self._cmd_yaw += math.radians(step_deg)
                 self._stream_setpoints = True
                 self._wait(settle_sec)
-            result = self._inspect_image(question)
-            if not result.get("ok"):
-                observations.append({"step": idx + 1, "ok": False, "error": result.get("error")})
+
+            yolo = self._run_yolo_detection()
+            if not yolo.get("ok"):
+                observations.append({"step": idx + 1, "ok": False, "error": yolo.get("error")})
                 continue
-            detection = self._parse_person_detection(str(result.get("answer", "")))
-            observation = {
+
+            observation: dict[str, Any] = {
                 "step": idx + 1,
                 "yaw_deg": round(math.degrees(self._cmd_yaw), 1),
-                **detection,
+                "found": False,
+                "yolo": yolo,
+                **self._pose_metadata(),
             }
+
+            if yolo.get("found"):
+                if confirm_vlm:
+                    vlm = self._vlm_person_confirmation()
+                    observation["vlm"] = vlm
+                    observation["found"] = bool(vlm.get("ok") and vlm.get("found"))
+                    observation["confidence"] = vlm.get("confidence", "unknown")
+                    observation["description"] = vlm.get("description", "")
+                else:
+                    best = yolo.get("best") or {}
+                    observation["found"] = True
+                    observation["confidence"] = "high" if float(best.get("confidence", 0)) >= 0.7 else "medium"
+                    observation["description"] = f"YOLO detectou {yolo.get('count', 0)} pessoa(s)"
+                    observation["vlm_confirmed"] = False
+
             observations.append(observation)
-            if detection["found"]:
+            if observation.get("found"):
+                evidence = self._maybe_save_evidence(
+                    {**observation, "event": "scan_person_found", "step": idx + 1},
+                    label=f"step_{idx + 1:03d}_found",
+                )
+                if evidence:
+                    observation["evidence"] = evidence
                 self._memory.add_finding(
                     f"Pessoa encontrada no passo {idx + 1}, yaw={observation['yaw_deg']} deg: "
-                    f"{detection['description']}"
+                    f"{observation.get('description', '')}"
                 )
                 if stop_on_found:
                     break
@@ -452,6 +477,7 @@ class V2RosTools:
             {
                 "ok": True,
                 "found": bool(found_items),
+                "backend": "yolo+vlm" if confirm_vlm else "yolo",
                 "first_match": found_items[0] if found_items else None,
                 "observations": observations,
                 "steps_completed": len(observations),

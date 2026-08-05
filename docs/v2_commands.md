@@ -33,10 +33,28 @@ A V2 recebe linguagem natural em `/v2/task`. O VLM decide quais tools chamar, en
 
 ```bash
 ./scripts/v2_send_task.sh "decole 1 metro, procure pessoas girando a câmera e me avise quando encontrar"
-./scripts/v2_send_task.sh "suba 1 metro, faça uma varredura de 360 graus procurando pessoas e pouse"
+./scripts/v2_send_task.sh "detecte pessoas no frame atual da câmera"
 ```
 
-Para essa missão, o agente deve usar `scan_for_people`. A tool gira o drone em etapas, analisa cada frame com a VLM e retorna `found=true` quando identificar uma pessoa.
+A detecção usa **YOLO local** (`detect_person_in_frame`, `scan_for_people`). Quando há candidato, a VLM pode confirmar o contexto (`YOLO_CONFIRM_VLM=true`). Evidências são salvas em `runs/search_evidence/` quando `YOLO_SAVE_EVIDENCE=true`.
+
+Instale dependências YOLO (venv isolado — **não use `pip3 install` no sistema**):
+
+```bash
+# se ainda não tiver venv no Python do sistema:
+sudo apt install python3-venv python3-full
+
+./scripts/install_yolo_deps.sh
+```
+
+Se aparecer `externally-managed-environment`, você tentou instalar no Python do Ubuntu. Use apenas o script acima; ele cria `.python_deps/yolo-venv` e instala lá dentro.
+
+Opcional: rodar detector standalone em paralelo:
+
+```bash
+./scripts/run_yolo_detector.sh
+ros2 topic echo /v2/yolo/detections
+```
 
 ## Segurança
 

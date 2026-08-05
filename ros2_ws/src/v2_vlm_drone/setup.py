@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "v2_vlm_agent = v2_vlm_drone.v2_vlm_agent_node:main",
+            "v2_yolo_person_detector = v2_vlm_drone.yolo_person_node:main",
         ],
     },
 )

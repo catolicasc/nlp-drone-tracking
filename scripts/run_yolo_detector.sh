@@ -27,15 +27,9 @@ set -u
 # shellcheck source=lib/yolo_env.sh
 source "$PROJECT_ROOT/scripts/lib/yolo_env.sh"
 
-if [ -z "${LVLM_API_KEY:-${OPENAI_API_KEY:-}}" ]; then
-  echo "Erro: configure LVLM_API_KEY no .env antes de iniciar o agente V2."
-  echo "      A V2 não possui fallback heurístico."
-  exit 1
-fi
+echo "==> Oracle Vision V2: YOLO person detector"
+echo "    Camera:     /drone/camera/image_raw"
+echo "    Detections: /v2/yolo/detections"
+echo "    Model:      ${YOLO_MODEL:-yolov8n.pt}"
 
-echo "==> Oracle Vision V2: agente VLM-only"
-echo "    Task topic: /v2/task"
-echo "    Status:     /v2/status"
-echo "    Model:      ${LVLM_MODEL:-gpt-4o-mini}"
-
-exec ros2 run v2_vlm_drone v2_vlm_agent --ros-args -p use_sim_time:=false "$@"
+exec ros2 run v2_vlm_drone v2_yolo_person_detector --ros-args -p use_sim_time:=false "$@"
