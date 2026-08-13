@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """
-Oracle Vision — standalone Isaac Sim app (padrão Pegasus).
+Oracle Vision — standalone Isaac Sim app (padrão Pegasus, Isaac Sim 6.0).
 
 Bootstrap via SimulationApp; lógica de simulação na classe OracleVisionApp.
+
+Isaac Sim 6.0: a classe World foi removida → SimulationManager/RenderingManager
+com callbacks de simulação/render; o loop usa simulation_app.update().
 """
 
 from __future__ import annotations
@@ -41,15 +44,49 @@ simulation_app = SimulationApp(
 )
 
 import omni.timeline
-from omni.isaac.core import World
-from omni.isaac.core.utils.prims import is_prim_path_valid
-from omni.isaac.core.utils.stage import add_reference_to_stage, get_current_stage
-from omni.isaac.nucleus import get_assets_root_path
-from pxr import Usd, UsdGeom, UsdLux
+import omni.usd
+from isaacsim.core.rendering_manager import RenderingManager, RenderingEvent
+from isaacsim.core.simulation_manager import SimulationManager, SimulationEvent
+import isaacsim.core.experimental.utils.stage as _stage_utils
+from isaacsim.storage.native import get_assets_root_path
+from pxr import Gf, Usd, UsdGeom, UsdLux, UsdPhysics
 
 from config_loader import load_config, resolve_usd_path
 from sensors import setup_sensors
 from spawn import PegasusQuadrotorSpec, PersonSpawnSpec, spawn_pegasus_quadrotor, spawn_people
+
+
+def _get_stage():
+    """Stage USD atual (substitui omni.isaac.core.utils.stage.get_current_stage)."""
+    return omni.usd.get_context().get_stage()
+
+
+def _is_prim_path_valid(prim_path: str) -> bool:
+    """True se o prim existe no stage (substitui omni.isaac.core.utils.prims.is_prim_path_valid)."""
+    if not prim_path:
+        return False
+    prim = _get_stage().GetPrimAtPath(prim_path)
+    return prim is not None and prim.IsValid()
+
+
+def _add_reference_to_stage(usd_path: str, prim_path: str) -> None:
+    """Referencia um USD no stage (substitui omni.isaac.core.utils.stage.add_reference_to_stage)."""
+    _stage_utils.add_reference_to_stage(usd_path=usd_path, path=prim_path)
+
+
+def _add_default_ground_plane(size: float = 250.0) -> None:
+    """Ground plane com colisão via USD puro (padrão do exemplo 0_template do Pegasus 6.0).
+
+    Cubo fino com topo em z=0 (superfície do chão).
+    """
+    stage = _get_stage()
+    ground = UsdGeom.Cube.Define(stage, "/World/DefaultGroundPlane")
+    ground.GetSizeAttr().Set(size)
+    xform = UsdGeom.Xformable(ground.GetPrim())
+    thickness = size * 0.02
+    xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.5 * thickness))
+    xform.AddScaleOp().Set(Gf.Vec3d(1.0, 1.0, 0.02))
+    UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
 
 
 class PersonFoundListener:
@@ -101,13 +138,12 @@ class PersonFoundListener:
 
 
 class OracleVisionApp:
-    """App standalone: World + cena + drone Pegasus/PX4 + sensores + callbacks."""
+    """App standalone: stage + cena + drone Pegasus/PX4 + sensores + callbacks."""
 
     def __init__(self) -> None:
         self.config, self.project_root = load_config()
         self.timeline = omni.timeline.get_timeline_interface()
         self.stop_sim = False
-        self._sim_started = False
 
         self._light = None
         self._person_found_listener: PersonFoundListener | None = None
@@ -116,15 +152,10 @@ class OracleVisionApp:
 
         self._print_banner()
 
-        if World.instance():
-            World.instance().clear_instance()
-
-        self.world = World(stage_units_in_meters=1.0)
         self._setup_world()
         self._setup_people()
         self._setup_drone_and_sensors()
         self._register_callbacks()
-        self.world.reset()
 
         print("Cena pronta.")
 
@@ -139,7 +170,7 @@ class OracleVisionApp:
         print(f"PX4_PATH={os.getenv('PX4_PATH')}")
 
     def _setup_world(self) -> None:
-        self.world.scene.add_default_ground_plane()
+        _add_default_ground_plane()
         self._load_usd_scene()
         self._load_isaac_environment()
 
@@ -156,8 +187,8 @@ class OracleVisionApp:
             return
 
         prim_path = "/World/Environment"
-        if not is_prim_path_valid(prim_path):
-            add_reference_to_stage(usd_path=usd_full_path, prim_path=prim_path)
+        if not _is_prim_path_valid(prim_path):
+            _add_reference_to_stage(usd_path=usd_full_path, prim_path=prim_path)
             print(f"USD carregado em {prim_path}")
 
     def _load_isaac_environment(self) -> None:
@@ -172,12 +203,12 @@ class OracleVisionApp:
 
         usd_path = f"{assets_root}/Isaac/{str(world_asset_rel).lstrip('/')}"
         prim_path = "/World/Environment"
-        if not is_prim_path_valid(prim_path):
-            add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+        if not _is_prim_path_valid(prim_path):
+            _add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
             print(f"Ambiente Isaac carregado em {prim_path}: {usd_path}")
 
     def _spawn_bounds_from_default_prim(self) -> tuple[tuple[float, float], float] | None:
-        stage = get_current_stage()
+        stage = _get_stage()
         default_prim = stage.GetDefaultPrim()
         if not default_prim or not default_prim.IsValid():
             return None
@@ -250,7 +281,8 @@ class OracleVisionApp:
             print("Não consegui localizar os assets do Isaac Sim.")
             return
 
-        asset_rel_path = "People/Characters/original_male_adult_police_04/male_adult_police_04.usd"
+        # Asset do personagem no Isaac 6.0 (em 5.1 era original_male_adult_police_04).
+        asset_rel_path = "People/Characters/male_adult_police_04/male_adult_police_04.usd"
         min_d_requested = max(0.0, float(min_distance_m))
         half = max(1.0, float(area_half_extent_m))
         cx, cy = float(area_center_xy[0]), float(area_center_xy[1])
@@ -314,7 +346,6 @@ class OracleVisionApp:
                 pass
 
         spawn_pegasus_quadrotor(
-            self.world,
             px4_path,
             PegasusQuadrotorSpec(init_pos=drone_pos),
         )
@@ -325,7 +356,7 @@ class OracleVisionApp:
         self._person_found_listener.start()
 
     def _ensure_drone_light(self, drone_prim_path: str):
-        stage = get_current_stage()
+        stage = _get_stage()
         light_path = f"{drone_prim_path}/person_light"
         light = UsdLux.SphereLight.Define(stage, light_path)
         light.CreateRadiusAttr(0.05)
@@ -334,10 +365,14 @@ class OracleVisionApp:
         return light
 
     def _register_callbacks(self) -> None:
-        self.world.add_render_callback("oracle_vision_drone_light", self._render_callback)
-        self.world.add_timeline_callback("oracle_vision_timeline", self._timeline_callback)
+        self._cb_render = RenderingManager.register_callback(
+            RenderingEvent.NEW_FRAME, callback=self._render_callback
+        )
+        self._cb_stop = SimulationManager.register_callback(
+            self._on_sim_stopped, SimulationEvent.SIMULATION_STOPPED
+        )
 
-    def _render_callback(self, _data) -> None:
+    def _render_callback(self, event) -> None:
         if self._light is None or self._person_found_listener is None:
             return
 
@@ -358,19 +393,19 @@ class OracleVisionApp:
         except Exception:
             pass
 
-    def _timeline_callback(self, _timeline_event) -> None:
-        if self._sim_started and self.world.is_stopped():
-            self.stop_sim = True
+    def _on_sim_stopped(self, *args) -> None:
+        self.stop_sim = True
 
     def run(self) -> None:
         self.stop_sim = False
         self.timeline.play()
-        self._sim_started = True
 
         while simulation_app.is_running() and not self.stop_sim:
-            self.world.step(render=True)
+            simulation_app.update()
 
         carb.log_warn("Oracle Vision simulation app is closing.")
+        SimulationManager.deregister_callback(self._cb_stop)
+        RenderingManager.deregister_callback(self._cb_render)
         self.timeline.stop()
         simulation_app.close()
 

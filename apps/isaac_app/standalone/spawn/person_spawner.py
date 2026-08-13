@@ -8,9 +8,21 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import omni.usd
-from omni.isaac.core.utils.prims import is_prim_path_valid
-from omni.isaac.core.utils.stage import add_reference_to_stage
+import isaacsim.core.experimental.utils.stage as _stage_utils
 from pxr import Gf, UsdGeom
+
+
+def _is_prim_path_valid(prim_path: str) -> bool:
+    """True se o prim existe no stage (substitui omni.isaac.core.utils.prims.is_prim_path_valid)."""
+    if not prim_path:
+        return False
+    prim = omni.usd.get_context().get_stage().GetPrimAtPath(prim_path)
+    return prim is not None and prim.IsValid()
+
+
+def _add_reference_to_stage(usd_path: str, prim_path: str) -> None:
+    """Referencia um USD no stage (substitui omni.isaac.core.utils.stage.add_reference_to_stage)."""
+    _stage_utils.add_reference_to_stage(usd_path=usd_path, path=prim_path)
 
 
 @dataclass(frozen=True)
@@ -30,8 +42,8 @@ def spawn_person(assets_root: str, spec: PersonSpawnSpec) -> bool:
         return False
 
     usd_path = f"{assets_root}/Isaac/{spec.asset_rel_path}"
-    if not is_prim_path_valid(spec.prim_path):
-        add_reference_to_stage(usd_path=usd_path, prim_path=spec.prim_path)
+    if not _is_prim_path_valid(spec.prim_path):
+        _add_reference_to_stage(usd_path=usd_path, prim_path=spec.prim_path)
 
     stage = omni.usd.get_context().get_stage()
     prim = stage.GetPrimAtPath(spec.prim_path)

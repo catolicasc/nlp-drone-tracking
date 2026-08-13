@@ -15,7 +15,16 @@ if [ -z "${ISAAC_SIM_PATH:-}" ]; then
   exit 1
 fi
 
-ISAAC_PYTHON="${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh"
+# Isaac Sim 5.1 (source build): _build/linux-x86_64/release/python.sh
+# Isaac Sim 6.0 (standalone): python.sh na raiz da instalação
+if [ -x "${ISAAC_SIM_PATH}/python.sh" ]; then
+  ISAAC_PYTHON="${ISAAC_SIM_PATH}/python.sh"
+elif [ -x "${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh" ]; then
+  ISAAC_PYTHON="${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh"
+else
+  echo "Erro: não encontrei python.sh do Isaac Sim em $ISAAC_SIM_PATH"
+  exit 1
+fi
 SCRIPT_PATH="$PROJECT_ROOT/apps/isaac_app/standalone/main.py"
 
 if [ ! -x "$ISAAC_PYTHON" ]; then
@@ -40,14 +49,19 @@ fi
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 
 ISAAC_RUNTIME_DIR="$(dirname "$ISAAC_PYTHON")"
-BRIDGE_LIB_DIR="$ISAAC_RUNTIME_DIR/exts/isaacsim.ros2.bridge/${ROS_DISTRO}/lib"
+# Isaac Sim 6.0: libs ROS 2 embutidas em exts/isaacsim.ros2.core/<distro>/lib
+# Isaac Sim 5.1: exts/isaacsim.ros2.bridge/<distro>/lib
+BRIDGE_LIB_DIR="$ISAAC_RUNTIME_DIR/exts/isaacsim.ros2.core/${ROS_DISTRO}/lib"
+if [ ! -d "$BRIDGE_LIB_DIR" ]; then
+  BRIDGE_LIB_DIR="$ISAAC_RUNTIME_DIR/exts/isaacsim.ros2.bridge/${ROS_DISTRO}/lib"
+fi
 
 if [ -d "$BRIDGE_LIB_DIR" ]; then
   # Isaac Sim package com bibliotecas ROS 2 leves embutidas.
   export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${BRIDGE_LIB_DIR}"
   echo "ROS2 Bridge: usando libs embutidas do Isaac ($BRIDGE_LIB_DIR)"
 elif [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
-  # Isaac Sim 5.1/source tree pode não trazer as libs embutidas; use ROS do sistema.
+  # Alguns pacotes não trazem as libs embutidas; use ROS do sistema.
   set +u
   # shellcheck source=/dev/null
   source "/opt/ros/${ROS_DISTRO}/setup.bash"
