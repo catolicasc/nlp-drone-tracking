@@ -1,8 +1,10 @@
 world:
   isaac_asset_rel_path: ""
-  spawn_area_half_extent_m: 80.0
+  # Área menor (±20 m) para as pessoas ficarem visíveis da posição do drone
+  # (era 80 m — pessoas viravam pontinhos). Ajustar conforme o experimento.
+  spawn_area_half_extent_m: 20.0
   spawn_area_center_xy: [0.0, 0.0]
-  spawn_area_from_default_prim: true
+  spawn_area_from_default_prim: false
 
 drones:
   - name: drone_1
@@ -52,5 +54,12 @@ sensors:
 
 people:
   count: 10
-  min_distance_m: 0.0
+  # Evita pessoas nascendo sobrepostas dentro da área de ±20 m
+  min_distance_m: 2.0
+  # true: pessoas ANDANDO via IRA (isaacsim.replicator.agent, rotina wander;
+  # ignoram spawn_area/min_distance — posicionamento e NavMesh são do IRA).
+  # false: pessoas estáticas via person_spawner (usa spawn_area_half_extent_m).
+  animated: true
+  # Template de config do IRA (num e environment são sobrepostos pelo app)
+  ira_config: config/ira_people.yaml
   z: 0.0

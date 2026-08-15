@@ -34,12 +34,31 @@ if _pegasus_path:
 
 import carb
 from isaacsim import SimulationApp
+from config_loader import load_config as _load_config
+
+# O config precisa ser lido antes do SimulationApp para decidir se a extensão
+# do IRA (pessoas animadas) entra no bootstrap via --enable.
+try:
+    _bootstrap_config, _bootstrap_root = _load_config()
+    _PEOPLE_ANIMATED = bool((_bootstrap_config.get("people", {}) or {}).get("animated", False))
+except Exception:
+    _bootstrap_config = {}
+    _bootstrap_root = Path.cwd()
+    _PEOPLE_ANIMATED = False
+
+# Só é True se o setup do IRA de fato concluiu (ver _setup_ira_people); o
+# _setup_people usa isso para decidir entre pessoas IRA e spawn estático.
+_IRA_PEOPLE_LOADED = False
+
+_extra_args = ["--enable", "isaacsim.ros2.bridge"]
+if _PEOPLE_ANIMATED:
+    _extra_args += ["--enable", "isaacsim.replicator.agent.core"]
 
 _HEADLESS = os.getenv("HEADLESS", "0").strip().lower() in {"1", "true", "yes"}
 simulation_app = SimulationApp(
     {
         "headless": _HEADLESS,
-        "extra_args": ["--enable", "isaacsim.ros2.bridge"],
+        "extra_args": _extra_args,
     }
 )
 
@@ -170,9 +189,22 @@ class OracleVisionApp:
         print(f"PX4_PATH={os.getenv('PX4_PATH')}")
 
     def _setup_world(self) -> None:
-        _add_default_ground_plane()
+        # No modo animado o IRA abre o assets/ira_ground.usda como stage raiz
+        # (chão 40 m + luz): não recriar/sobrescrever o que já existe.
+        if not _is_prim_path_valid("/World/DefaultGroundPlane"):
+            _add_default_ground_plane()
         self._load_usd_scene()
         self._load_isaac_environment()
+        if not _is_prim_path_valid("/World/Light/DomeLight"):
+            self._setup_lighting()
+
+    def _setup_lighting(self) -> None:
+        # Sem nenhuma luz na stage o RTX renderiza tudo preto (câmera e viewport);
+        # dome light branca no lugar da HDR do S3 para não depender de streaming.
+        stage = _get_stage()
+        light = UsdLux.DomeLight.Define(stage, "/World/Light/DomeLight")
+        light.CreateIntensityAttr(5e3)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
 
     def _load_usd_scene(self) -> None:
         usd_cfg = self.config.get("world", {}).get("usd")
@@ -236,6 +268,10 @@ class OracleVisionApp:
             return None
 
     def _setup_people(self) -> None:
+        if _IRA_PEOPLE_LOADED:
+            print("Pessoas animadas (IRA) já carregadas no setup do stage; spawn estático ignorado.")
+            return
+
         people_cfg = self.config.get("people", {}) or {}
         n_people = int(people_cfg.get("count", 20))
         if n_people <= 0:
@@ -410,7 +446,78 @@ class OracleVisionApp:
         simulation_app.close()
 
 
+def _setup_ira_people(config: dict, project_root) -> bool:
+    """Soba o pipeline IRA de pessoas animadas como dono do stage raiz.
+
+    Idiom do exemplo oficial tools/actor_sdg/actor_sdg.py: o IRA abre o
+    environment (nosso assets/ira_ground.usda) como camada raiz, assa o NavMesh
+    e spawna os personagens com rotina wander. O drone Pegasus e a câmera são
+    adicionados depois, em cima do stage aberto pelo IRA. A extensão precisa
+    ter sido habilitada no bootstrap (ver extra_args do SimulationApp).
+    """
+    try:
+        import yaml as _yaml
+
+        import carb as _carb
+        from isaacsim.replicator.agent.core import api as IRA
+        from isaacsim.replicator.agent.core.configuration.models.root import RootConfig
+    except Exception as e:  # noqa: BLE001
+        print(f"[ira] extensão isaacsim.replicator.agent.core indisponível ({e}); uso pessoas estáticas")
+        return False
+
+    settings = _carb.settings.get_settings()
+    settings.set("/app/scripting/ignoreWarningDialog", True)
+    settings.set("/app/omni.graph.scriptnode/enable_opt_in", False)
+    settings.set("/rtx/raytracing/fractionalCutoutOpacity", True)  # personagens DH
+    # Baker de NavMesh: GPU (default) trava em headless sem CUDA; CPU pode
+    # produzir navmesh vazia em alguns cenários. Default: GPU no GUI, CPU no
+    # headless. NAVMESH_USE_GPU=0 força CPU.
+    _nav_gpu = os.getenv("NAVMESH_USE_GPU", "0" if _HEADLESS else "1").strip().lower() in {"1", "true", "yes"}
+    settings.set("/persistent/exts/omni.anim.navigation.core/navMesh/useGpu", _nav_gpu)
+
+    people_cfg = config.get("people", {}) or {}
+    template_path = Path(project_root) / str(people_cfg.get("ira_config", "config/ira_people.yaml"))
+    try:
+        with open(template_path) as f:
+            data = _yaml.safe_load(f)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ira] template {template_path} ilegível ({e}); uso pessoas estáticas")
+        return False
+
+    ira = data["isaacsim.replicator.agent"]
+    ira["environment"]["base_stage_asset_path"] = str(
+        Path(__file__).resolve().parent / "assets" / "ira_ground.usda"
+    )
+    group = next(iter(ira["character"]["groups"].values()))
+    group["num"] = int(people_cfg.get("count", 10))
+
+    IRA.set_config(RootConfig.model_validate(data))
+    if IRA.get_config_file() is None:
+        print("[ira] config inválida; uso pessoas estáticas")
+        return False
+
+    async def _run():
+        await IRA.setup_simulation()
+
+    from omni.kit.async_engine import run_coroutine
+
+    task = run_coroutine(_run())
+    while not task.done():
+        simulation_app.update()
+    if task.exception() is not None:
+        print(f"[ira] setup_simulation falhou: {task.exception()!r}; uso pessoas estáticas")
+        return False
+
+    print(f"[ira] {group['num']} pessoas animadas (wander) carregadas")
+    global _IRA_PEOPLE_LOADED
+    _IRA_PEOPLE_LOADED = True
+    return True
+
+
 def main() -> None:
+    if _PEOPLE_ANIMATED:
+        # Ordem obrigatória: IRA primeiro (abre o stage raiz); drone/câmera depois.
+        _setup_ira_people(_bootstrap_config, _bootstrap_root)
     OracleVisionApp().run()
 
 

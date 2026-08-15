@@ -186,6 +186,55 @@ def _configure_camera_prim(camera_prim_path: str, cam_cfg: dict) -> None:
     )
 
 
+def _apply_pinhole_intrinsics(camera_prim_path: str, cam_cfg: dict, width: int, height: int, cam) -> None:
+    """Aplica o modelo pinhole OpenCV com intrínsecas explícitas no prim da câmera.
+
+    Idiom do MonocularCamera do Pegasus (set_lens_distortion_model +
+    set_opencv_pinhole_properties): grava a schema OmniLensDistortionOpenCvPinholeAPI
+    e os attrs omni:lensdistortion:opencvPinhole:{fx,fy,cx,cy}, que o
+    ROS2CameraInfoHelper usa para publicar camera_info exato (em vez de derivar
+    do renderer). Sem o objeto Camera (fallback pxr), grava os mesmos attrs.
+    """
+    focal_length = float(cam_cfg.get("focal_length_mm", 18.0))
+    horizontal_aperture = float(cam_cfg.get("horizontal_aperture_mm", 20.955))
+    vertical_aperture = float(cam_cfg.get("vertical_aperture_mm", horizontal_aperture * height / width))
+
+    fx = focal_length * width / horizontal_aperture
+    fy = focal_length * height / vertical_aperture
+    cx = width / 2.0
+    cy = height / 2.0
+
+    applied = False
+    if cam is not None:
+        try:
+            cam.set_lens_distortion_model("OmniLensDistortionOpenCvPinholeAPI")
+            cam.set_opencv_pinhole_properties(cx=cx, cy=cy, fx=fx, fy=fy)
+            applied = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[setup_sensors] Camera API de intrínsecas falhou ({e}); aplicando via pxr.")
+
+    if not applied:
+        from pxr import Sdf
+
+        stage = _get_current_stage()
+        prim = stage.GetPrimAtPath(camera_prim_path)
+        if not prim or not prim.IsValid():
+            return
+        prim.ApplyAPI("OmniLensDistortionOpenCvPinholeAPI")
+        prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.Token).Set("opencvPinhole")
+        for name, value in (("fx", fx), ("fy", fy), ("cx", cx), ("cy", cy)):
+            prim.CreateAttribute(
+                f"omni:lensdistortion:opencvPinhole:{name}", Sdf.ValueTypeNames.Float
+            ).Set(float(value))
+
+    print(
+        "[setup_sensors] Intrínsecas pinhole aplicadas: "
+        f"fx={fx:.2f} fy={fy:.2f} cx={cx:.2f} cy={cy:.2f} "
+        f"(focal_length_mm={focal_length}, h_aperture_mm={horizontal_aperture}, "
+        f"v_aperture_mm={vertical_aperture:.4f})"
+    )
+
+
 def _print_world_translation(prim_path: str, label: str) -> None:
     try:
         from pxr import UsdGeom
@@ -301,6 +350,7 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
 
     _set_local_xform(camera_prim_path, cam_position, cam_orientation)
     _configure_camera_prim(camera_prim_path, cam_cfg)
+    _apply_pinhole_intrinsics(camera_prim_path, cam_cfg, width, height, cam)
     print(
         "[setup_sensors] Camera mount config: "
         f"position={cam_position}, orientation_mode={orientation_mode}, orientation_xyzw={cam_orientation}"

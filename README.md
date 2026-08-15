@@ -30,6 +30,7 @@ Fluxo principal:
 
 ## Documentação
 
+- `docs/requisitos.md` — requisitos funcionais e não funcionais do sistema
 - `docs/v2_architecture.md`
 - `docs/v2_camera.md`
 - `docs/v2_commands.md`
