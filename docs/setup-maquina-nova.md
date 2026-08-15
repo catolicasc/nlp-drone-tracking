@@ -211,6 +211,20 @@ cp .env.example .env
 `scripts/lib/yolo_env.sh` usa `PROJECT_ROOT/.python_deps/yolo-venv` (ou legado
 `.python_deps/yolo`); `yolov8n.pt` já está versionado no repo.
 
+## 8b. Build do `ros2_ws` (obrigatório — agente VLM)
+
+O pacote do agente (`v2_vlm_drone`) é um pacote ament do ROS 2 e precisa ser
+compilado uma vez por máquina — sem isso o `v2_agent.sh` (e o botão "Agente
+VLM" da GUI) falha com `Package 'v2_vlm_drone' not found`:
+
+```bash
+cd ~/npl-drone-mestrado/npl-drone-tracking/ros2_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+```
+
+(`build/`, `install/` e `log/` já estão no .gitignore.)
+
 ## 9. Verificação rápida
 
 ```bash
