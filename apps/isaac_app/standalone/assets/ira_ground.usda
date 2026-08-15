@@ -21,10 +21,14 @@ def Xform "World"
 {
     # O bake do NavMesh amostra colisão via PhysX — sem PhysicsScene no stage o
     # bake nunca conclui (Pegasus só criaria a cena depois do setup do IRA).
+    # ATENÇÃO aos sinais: gravity = direction * magnitude. Magnitude é
+    # POSITIVA (9.81) com direction (0,0,-1). Com magnitude=-9.81 a gravidade
+    # aponta para CIMA e o drone "cai para cima" (sintoma: sobe sem parar e o
+    # HIL_GPS estoura int16 com velocity_down ~ -32768).
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, 0, -1)
-        float physics:gravityMagnitude = -9.81
+        float physics:gravityMagnitude = 9.81
     }
 
     # Chão visual: quad com normals faceVarying (requisito do baker do NavMesh).
