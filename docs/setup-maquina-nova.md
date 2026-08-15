@@ -206,10 +206,20 @@ cp .env.example .env
 #   LVLM_API_KEY=...  SPEACH_MODEL=...   (copiar da máquina antiga)
 ```
 
-## 8. Venv YOLO (recriado na 1ª execução)
+## 8. Venv YOLO (obrigatória p/ detecção — instalar manualmente)
 
-`scripts/lib/yolo_env.sh` usa `PROJECT_ROOT/.python_deps/yolo-venv` (ou legado
-`.python_deps/yolo`); `yolov8n.pt` já está versionado no repo.
+O detector (`scan_for_people`) usa ultralytics numa venv isolada. Sem ela a
+tool falha com "ultralytics não instalado" e a missão termina sem detecções
+(o drone decola/pousa normalmente). Instalar (torch+ultralytics, ~2 GB):
+
+```bash
+cd ~/npl-drone-mestrado/npl-drone-tracking
+./scripts/install_yolo_deps.sh
+# teste: .python_deps/yolo-venv/bin/python -c "from ultralytics import YOLO"
+```
+
+`scripts/lib/yolo_env.sh` injeta o site-packages da venv no `PYTHONPATH` do
+agente (que roda no Python do ROS); `yolov8n.pt` já está versionado no repo.
 
 ## 8b. Build do `ros2_ws` (obrigatório — agente VLM)
 
