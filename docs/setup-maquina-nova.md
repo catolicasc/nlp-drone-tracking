@@ -47,6 +47,18 @@ sudo apt install ros-jazzy-rmw-fastrtps-cpp
 source /opt/ros/jazzy/setup.bash
 ```
 
+> **Dataset geoid do GeographicLib (obrigatório p/ MAVROS):** sem ele o nó do
+> MAVROS morre no boot com `UAS: GeographicLib exception: File not readable
+> .../egm96-5.pgm` (o sintoma na GUI é o botão MAVROS iniciar e finalizar
+> logo em seguida). Instalar sem root (o `run_mavros_px4.sh` do projeto
+> exporta o `GEOGRAPHICLIB_DATA` automaticamente):
+>
+> ```bash
+> geographiclib-get-geoids -p ~/.local/share/GeographicLib egm96-5
+> ```
+>
+> (alternativa com sudo: `sudo geographiclib-get-geoids egm96-5`)
+
 > **Pop!_OS (testado em 24.04 / noble, 2026-08-14):** o repo do ROS 2 **não vem
 > configurado** (`Impossível encontrar o pacote ros-jazzy-*`) e o pacote pyserial
 > chama-se **`python3-serial`** (não `python3-pyserial`). Configurar antes:
