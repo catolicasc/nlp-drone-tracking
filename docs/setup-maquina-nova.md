@@ -166,10 +166,10 @@ chmod +x ~/Apps/QGroundControl-x86_64.AppImage
 Com o launcher do projeto, o QGC conecta **sozinho** (broadcast UDP 14550).
 Se não conectar: Comm Links → Add → UDP `127.0.0.1:14550`.
 
-> **Pessoas animadas (IRA) em headless**: no 6.0.1 o bake do NavMesh retorna
-> mesh vazia em headless (CPU e GPU) e os personagens nascem na origem sem
-> wander. Para headless use `people.animated: false` (estáticas — validado);
-> o modo animado requer GUI (`HEADLESS` indefinido). Detalhes no
+> **Pessoas animadas (IRA)**: funcionam em headless e GUI (validado 2026-08-15,
+> Isaac 6.0.1) — 10 pessoas espalhadas pelo chão com rotina wander. Requisitos
+> no stage: chão em Mesh quad com `normals` faceVarying e SEM `customLayerData
+> navmeshSettings` (a config do bake é em cm, via carb settings). Detalhes no
 > `erros-conhecidos.md` da skill isaac-sim-projeto (Achado 7).
 
 > **Entre dois runs**, derrube sobras (o python do Isaac atravessa o TERM do

@@ -3,40 +3,20 @@
     defaultPrim = "World"
     metersPerUnit = 1
     upAxis = "Z"
-    # Config do baker de NavMesh (lida do stage, não dos carb settings; ver
-    # golden files de omni.anim.navigation.core). Valores métricos — os defaults
-    # da extensão são decimais em cm (ex.: agentMinIslandRadius=200) e filtram
-    # um chão de 40 m inteiro, produzindo navmesh vazia.
-    customLayerData = {
-        dictionary navmeshSettings = {
-            double agentMaxFloorSlope = 45
-            double agentMaxRadius = 0.5
-            double agentMaxStepHeight = 0.25
-            double agentMinHeight = 1.8
-            double agentMinIslandRadius = 0.5
-            double agentMinRadius = 0.2
-            double agentSamplingDistance = 0.2
-            bool excludeRigidBodies = 1
-            dictionary areas = {
-                dictionary "0" = {
-                    string areaName = "Walkable"
-                    float3 color = (0.2, 0.8, 1)
-                    double defaultCost = 1
-                }
-                dictionary "1" = {
-                    string areaName = "NotWalkable"
-                    float3 color = (1, 0, 0)
-                    double defaultCost = -1
-                }
-            }
-        }
-    }
 )
 
 # Mundo mínimo para o pipeline IRA (pessoas animadas): chão de 40 m em
-# UsdGeom.Mesh (o baker do NavMesh só coleta triângulos — gprim Cube não serve)
-# com colisão para a física + dome light. O NavMesh do IRA cobre ±20 m,
-# casando com spawn_area_half_extent_m do sim.yaml.
+# UsdGeom.Mesh + dome light. O NavMesh do IRA cobre ±20 m, casando com
+# spawn_area_half_extent_m do sim.yaml.
+#
+# NOTAS DO BAKER DO NAVMESH (omni.anim.navigation.core 110.1.4, Isaac 6.0.1):
+# - A config do bake (agentMaxRadius, agentMinIslandRadius, ...) vive nos carb
+#   settings /exts/.../navMesh/config/* em CENTÍMETROS. Um customLayerData
+#   "navmeshSettings" no stage é lido e ZERA os parâmetros → navmesh vazia.
+#   Não autorar esses dados aqui.
+# - O collector só aceita Mesh com normals (faceVarying); 2 triângulos sem
+#   normals não são coletados. Quad + normals funciona (estilo TestNavMesh.usda
+#   oficial da extensão).
 def Xform "World"
 {
     # O bake do NavMesh amostra colisão via PhysX — sem PhysicsScene no stage o
@@ -47,14 +27,16 @@ def Xform "World"
         float physics:gravityMagnitude = -9.81
     }
 
-    # Chão visual em UsdGeom.Mesh SEM colisão: o baker do NavMesh só coleta
-    # triângulos (gprim Cube não serve) e, com excludeRigidBodies=True (default),
-    # geometria com PhysicsCollisionAPI é excluída do bake.
+    # Chão visual: quad com normals faceVarying (requisito do baker do NavMesh).
     def Mesh "DefaultGroundPlane"
     {
-        int[] faceVertexCounts = [3, 3]
-        int[] faceVertexIndices = [0, 2, 1, 0, 3, 2]
-        point3f[] points = [(-20, -20, 0), (20, -20, 0), (20, 20, 0), (-20, 20, 0)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 3, 2]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "faceVarying"
+        )
+        point3f[] points = [(-20, -20, 0), (20, -20, 0), (-20, 20, 0), (20, 20, 0)]
+        color3f[] primvars:displayColor = [(1, 1, 1)]
         uniform token subdivisionScheme = "none"
     }
 

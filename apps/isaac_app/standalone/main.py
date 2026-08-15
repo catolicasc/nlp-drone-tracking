@@ -52,7 +52,12 @@ _IRA_PEOPLE_LOADED = False
 
 _extra_args = ["--enable", "isaacsim.ros2.bridge"]
 if _PEOPLE_ANIMATED:
-    _extra_args += ["--enable", "isaacsim.replicator.agent.core"]
+    # omni.behavior.scripting.core: dependência do runtime de behaviors do
+    # metropolis pipeline (experience oficial actor_sdg habilita explicitamente).
+    _extra_args += [
+        "--enable", "isaacsim.replicator.agent.core",
+        "--enable", "omni.behavior.scripting.core",
+    ]
 
 _HEADLESS = os.getenv("HEADLESS", "0").strip().lower() in {"1", "true", "yes"}
 simulation_app = SimulationApp(
@@ -446,6 +451,45 @@ class OracleVisionApp:
         simulation_app.close()
 
 
+def _patch_ira_navmesh_bake() -> None:
+    """Garante que o bake da NavMesh conclua antes do spawn dos personagens.
+
+    O `ensure_navmesh_ready` do IRA considera a navmesh pronta assim que
+    `get_navmesh()` devolve um objeto — que existe (vazio) antes do bake
+    terminar — e os personagens nascem todos na origem. Esta versão assa
+    bloqueante (`start_navmesh_baking_and_wait`) e só aceita malha não-vazia
+    (`get_mesh_signature() != 0`).
+    """
+    import omni.anim.navigation.core as nav
+
+    import isaacsim.replicator.agent.core.scene_assembly.environment_loader as _env_loader
+
+    async def _ensure_navmesh_ready() -> bool:
+        inav = nav.acquire_interface()
+        if inav is None:
+            carb.log_error("[ira] interface de navegação indisponível")
+            return False
+        navmesh = inav.get_navmesh()
+        if navmesh is not None and navmesh.get_mesh_signature() != 0:
+            return True
+        try:
+            if not inav.start_navmesh_baking_and_wait():
+                carb.log_error("[ira] bake da NavMesh falhou (NavMeshVolume ausente?)")
+                return False
+        except Exception as exc:  # noqa: BLE001
+            carb.log_error(f"[ira] erro no bake da NavMesh: {exc}")
+            return False
+        navmesh = inav.get_navmesh()
+        ok = navmesh is not None and navmesh.get_mesh_signature() != 0
+        if ok:
+            print("[ira] NavMesh assada com sucesso")
+        else:
+            carb.log_error("[ira] bake da NavMesh concluiu com malha vazia")
+        return ok
+
+    _env_loader.ensure_navmesh_ready = _ensure_navmesh_ready
+
+
 def _setup_ira_people(config: dict, project_root) -> bool:
     """Soba o pipeline IRA de pessoas animadas como dono do stage raiz.
 
@@ -464,6 +508,8 @@ def _setup_ira_people(config: dict, project_root) -> bool:
     except Exception as e:  # noqa: BLE001
         print(f"[ira] extensão isaacsim.replicator.agent.core indisponível ({e}); uso pessoas estáticas")
         return False
+
+    _patch_ira_navmesh_bake()
 
     settings = _carb.settings.get_settings()
     settings.set("/app/scripting/ignoreWarningDialog", True)
@@ -498,6 +544,9 @@ def _setup_ira_people(config: dict, project_root) -> bool:
 
     async def _run():
         await IRA.setup_simulation()
+        # Ativa as rotinas dos personagens (wander/idle) — sem isso o setup
+        # carrega os personagens parados (idiom do tools/actor_sdg oficial).
+        await IRA.start_data_generation_async()
 
     from omni.kit.async_engine import run_coroutine
 

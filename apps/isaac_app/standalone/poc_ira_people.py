@@ -26,7 +26,10 @@ _POC_SECONDS = float(os.getenv("POC_SECONDS", "120"))
 simulation_app = SimulationApp(
     {
         "headless": _HEADLESS,
-        "extra_args": ["--enable", "isaacsim.replicator.agent.core"],
+        "extra_args": [
+            "--enable", "isaacsim.replicator.agent.core",
+            "--enable", "omni.behavior.scripting.core",
+        ],
     }
 )
 
@@ -69,21 +72,24 @@ async def _setup() -> bool:
         return False
 
     await IRA.setup_simulation()
+    # Ativa as rotinas (wander/idle) — idiom do tools/actor_sdg oficial.
+    await IRA.start_data_generation_async()
     return True
 
 
 def _character_positions() -> dict[str, tuple[float, float, float]]:
-    """Posições mundo dos personagens sob /World/Characters (prova de movimento)."""
-    stage = omni.usd.get_context().get_stage()
-    cache = UsdGeom.XformCache()
+    """Posições mundo via AgentsManager (fonte correta: o prim do grupo não
+    se move — a locomoção atualiza o translation do skeleton/behavior agent)."""
+    try:
+        from omni.metropolis.pipeline.agent.agents_manager import AgentsManager
+    except Exception:
+        return {}
     out: dict[str, tuple[float, float, float]] = {}
-    chars = stage.GetPrimAtPath("/World/Characters")
-    if not chars or not chars.IsValid():
-        return out
-    for child in chars.GetAllChildren():
+    for agent in AgentsManager.get_instance().get_runtime_agent_instances():
         try:
-            t = cache.GetLocalToWorldTransform(child).ExtractTranslation()
-            out[str(child.GetPath())] = (round(float(t[0]), 2), round(float(t[1]), 2), round(float(t[2]), 2))
+            p = agent.get_world_position()
+            if p is not None:
+                out[str(agent.prim_path)] = (round(float(p[0]), 2), round(float(p[1]), 2), round(float(p[2]), 2))
         except Exception:
             continue
     return out
