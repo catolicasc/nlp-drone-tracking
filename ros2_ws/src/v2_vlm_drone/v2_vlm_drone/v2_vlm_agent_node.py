@@ -29,6 +29,8 @@ class V2VlmAgentNode(Node):
         self.declare_parameter("max_radius_m", 15.0)
         self.declare_parameter("setpoint_rate_hz", 20.0)
         self.declare_parameter("pre_setpoints_sec", 5.0)
+        self.declare_parameter("search_timeout_sec", 180.0)
+        self.declare_parameter("min_battery_pct", 15.0)
 
         try:
             self._vlm = VlmClient.from_env()
@@ -51,6 +53,8 @@ class V2VlmAgentNode(Node):
             max_radius_m=self.get_parameter("max_radius_m").value,
             rate_hz=self.get_parameter("setpoint_rate_hz").value,
             pre_setpoints_sec=self.get_parameter("pre_setpoints_sec").value,
+            search_timeout_sec=self.get_parameter("search_timeout_sec").value,
+            min_battery_pct=self.get_parameter("min_battery_pct").value,
         )
 
         self._lock = threading.Lock()
@@ -86,7 +90,8 @@ class V2VlmAgentNode(Node):
             if self._busy:
                 if self._is_emergency_land(task):
                     self._publish_status({"event": "interrupt_land", "task": task})
-                    self._tools.land()
+                    # força: emergência pousa mesmo sem alvo confirmado
+                    self._tools.land({"force": True})
                     return
                 self._publish_status({"event": "rejected_busy", "task": task})
                 return

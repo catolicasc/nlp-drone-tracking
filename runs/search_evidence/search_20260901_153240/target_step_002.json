@@ -1,0 +1,54 @@
+{
+  "step": 2,
+  "yaw_deg": 1079.2,
+  "found": true,
+  "yolo": {
+    "ok": true,
+    "found": true,
+    "count": 1,
+    "best": {
+      "class_id": 0,
+      "class_name": "person",
+      "confidence": 0.8107,
+      "bbox_xyxy": [
+        756.5,
+        0.5,
+        881.4,
+        202.6
+      ]
+    },
+    "detections": [
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.8107,
+        "bbox_xyxy": [
+          756.5,
+          0.5,
+          881.4,
+          202.6
+        ]
+      }
+    ],
+    "backend": "yolo",
+    "model": "yolov8n.pt"
+  },
+  "pose": {
+    "x": 0.05,
+    "y": 0.054,
+    "z": 1.991,
+    "yaw_deg": -12.1
+  },
+  "setpoint_yaw_deg": 1079.2,
+  "vlm": {
+    "ok": true,
+    "found": true,
+    "confidence": "high",
+    "description": "Pessoa visível com camisa rosa.",
+    "raw_answer": "{\"found\":true,\"confidence\":\"high\",\"description\":\"Pessoa visível com camisa rosa.\"}"
+  },
+  "confidence": "high",
+  "description": "Pessoa visível com camisa rosa.",
+  "event": "target_found",
+  "target": "pessoa de camisa rosa"
+}

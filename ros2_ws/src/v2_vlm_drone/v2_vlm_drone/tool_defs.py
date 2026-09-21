@@ -21,6 +21,20 @@ Regras de segurança:
 - Para detectar pessoa no frame atual, use detect_person_in_frame (YOLO local + confirmação VLM opcional).
 - Para procurar pessoas girando o drone, use scan_for_people depois de decolar.
 - Termine toda tarefa com complete_task.
+
+Regras de busca de alvo (CRÍTICO):
+- Quando a tarefa descrever um alvo específico (ex.: "mulher, cabelo loiro, camisa azul"),
+  EXTRAIA essas características e passe em search_for_target(target_description="...").
+  A descrição fica guardada na memória da missão e o loop de busca só termina quando
+  o VLM confirmar o alvo correspondente.
+- land (pouso normal) SÓ após get_drone_status ou search_for_target retornarem
+  target_found=true. O pouso normal é consequência da confirmação do alvo,
+  NÃO a próxima etapa linear após uma tentativa de busca.
+- Se search_for_target retornar found=false com abort_reason (timeout, bateria,
+  conexão perdida, varredura esgotada), você pode: tentar nova busca com padrão
+  diferente, mover para novo setor, ou encerrar com safe_abort.
+- Em qualquer condição crítica (bateria baixa, conexão perdida, comportamento
+  anômalo), use safe_abort imediatamente — ele executa RTL com fallback LAND.
 """
 
 
@@ -130,6 +144,71 @@ def tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "search_for_target",
+                "description": (
+                    "Busca em LOOP até confirmar o alvo descrito: varia o yaw, roda YOLO por frame "
+                    "e, diante de candidato, pede confirmação ao VLM contra target_description. "
+                    "Sai por confirmação (found=true), timeout de busca, bateria mínima, perda de "
+                    "conexão ou varredura esgotada (nestes casos found=false com abort_reason e "
+                    "você deve chamar safe_abort). Use após takeoff."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target_description": {
+                            "type": "string",
+                            "description": (
+                                "Características do alvo extraídas da tarefa, ex.: "
+                                "'mulher, cabelo loiro, camisa azul'. Obrigatório."
+                            ),
+                        },
+                        "sweeps": {
+                            "type": "integer",
+                            "description": "Número máximo de voltas completas de varredura (1-6).",
+                        },
+                        "step_deg": {
+                            "type": "number",
+                            "description": "Graus por etapa de yaw (15-120; use 45 ou 60).",
+                        },
+                        "settle_sec": {
+                            "type": "number",
+                            "description": "Tempo de estabilização após cada giro antes de analisar.",
+                        },
+                        "confirm_vlm": {
+                            "type": "boolean",
+                            "description": "Se true (recomendado), confirma candidatos YOLO contra a descrição via VLM.",
+                        },
+                    },
+                    "required": ["target_description"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "safe_abort",
+                "description": (
+                    "Aborto por condição de segurança: para setpoints, executa AUTO.RTL com "
+                    "fallback AUTO.LAND e encerra a missão como falha controlada. Use quando a "
+                    "busca retornar abort_reason (timeout/bateria/conexão) ou em qualquer anomalia crítica."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Motivo do aborto (ex.: 'bateria crítica', 'timeout de busca').",
+                        }
+                    },
+                    "required": ["reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "takeoff",
                 "description": "Entra em OFFBOARD, arma e sobe para altitude z em metros.",
                 "parameters": {
@@ -219,8 +298,21 @@ def tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "land",
-                "description": "Comanda AUTO.LAND e para setpoints conflitantes.",
-                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                "description": (
+                    "Pouso normal (AUTO.LAND). Bloqueado enquanto target_found=false — só use "
+                    "após search_for_target confirmar o alvo. Em emergência, prefira safe_abort "
+                    "(ou force=true)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "force": {
+                            "type": "boolean",
+                            "description": "Se true, pousa mesmo sem alvo confirmado (emergência).",
+                        }
+                    },
+                    "additionalProperties": False,
+                },
             },
         },
         {

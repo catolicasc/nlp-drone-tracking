@@ -14,6 +14,7 @@ Uso:
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -46,9 +47,14 @@ class ExperimentRecorder(Node):
         super().__init__("v2_experiment_recorder")
 
         self.declare_parameter("status_topic", "/v2/status")
-        self.declare_parameter(
-            "db_url", "postgresql://v2:v2@localhost:5432/v2_experiments"
+        # A connection string pode vir de 3 fontes, em ordem de precedência:
+        #   1. parâmetro ROS  (--ros-args -p db_url:=...)
+        #   2. variável de ambiente V2_DB_URL (definida no .env do projeto)
+        #   3. default hardcoded (apenas para dev local)
+        default_db_url = os.environ.get(
+            "V2_DB_URL", "postgresql://admin:senha123@localhost:5433/meu_banco"
         )
+        self.declare_parameter("db_url", default_db_url)
         self.declare_parameter("experiment_id", "")
         self.declare_parameter("flush_interval_s", 2.0)
         self.declare_parameter("batch_size", 100)

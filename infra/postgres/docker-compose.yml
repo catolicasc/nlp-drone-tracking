@@ -1,0 +1,40 @@
+# Postgres para o Oracle Vision V2 (experiment recorder)
+# Uso:
+#   docker compose up -d          # sobe em background
+#   docker compose logs -f        # acompanha logs
+#   docker compose down           # derruba
+#   docker compose down -v        # derruba E apaga o volume (reset do banco)
+#
+# Credenciais (editáveis aqui ou via .env ao lado):
+#   host:     localhost
+#   porta:    5433  (evita colidir com Postgres do host em 5432)
+#   user:     admin
+#   password: senha123
+#   database: meu_banco
+#
+# Connection string para o recorder:
+#   postgresql://admin:senha123@localhost:5433/meu_banco
+
+services:
+  v2-postgres:
+    image: postgres:16-alpine
+    container_name: v2-postgres
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Sao_Paulo
+    ports:
+      - "${V2_PG_PORT:-5433}:5432"
+    volumes:
+      - v2_pg_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-meu_banco}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  v2_pg_data:
+    name: v2_pg_data

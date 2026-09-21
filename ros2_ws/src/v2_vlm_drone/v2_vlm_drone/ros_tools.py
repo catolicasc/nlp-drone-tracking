@@ -14,7 +14,7 @@ from mavros_msgs.msg import State, StatusText
 from mavros_msgs.srv import CommandBool, SetMode
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import BatteryState, Image
 
 from .evidence import save_search_evidence
 from .image_utils import png_data_url_from_image
@@ -54,6 +54,8 @@ class V2RosTools:
         max_radius_m: float,
         rate_hz: float,
         pre_setpoints_sec: float,
+        search_timeout_sec: float = 180.0,
+        min_battery_pct: float = 15.0,
     ) -> None:
         self._node = node
         self._memory = memory
@@ -63,6 +65,8 @@ class V2RosTools:
         self._max_radius_m = float(max_radius_m)
         self._rate_hz = max(float(rate_hz), 1.0)
         self._pre_setpoints_sec = max(float(pre_setpoints_sec), 1.0)
+        self._search_timeout_sec = max(float(search_timeout_sec), 10.0)
+        self._min_battery_pct = float(min_battery_pct)
 
         self._state = State()
         self._have_state = False
@@ -71,6 +75,7 @@ class V2RosTools:
         self._last_image: Image | None = None
         self._last_statustext = ""
         self._statustext_history: list[str] = []
+        self._last_battery_pct: float | None = None
 
         self._cmd_x = 0.0
         self._cmd_y = 0.0
@@ -79,6 +84,8 @@ class V2RosTools:
         self._stream_setpoints = False
         self._task_done = False
         self._task_result: dict[str, Any] | None = None
+        self._abort_requested = False
+        self._abort_reason: str = ""
         self._yolo: YoloPersonDetector | None = None
         self._yolo_model = os.environ.get("YOLO_MODEL", "yolov8n.pt")
         self._yolo_conf = float(os.environ.get("YOLO_CONF", "0.35"))
@@ -99,19 +106,22 @@ class V2RosTools:
         node.create_subscription(PoseStamped, "/mavros/local_position/pose", self._on_pose, qos_best_effort)
         node.create_subscription(StatusText, "/mavros/statustext/recv", self._on_statustext, qos_best_effort)
         node.create_subscription(Image, "/drone/camera/image_raw", self._on_image, 10)
+        node.create_subscription(BatteryState, "/mavros/battery", self._on_battery, 10)
 
         self._handlers: dict[str, Callable[[dict[str, Any]], str]] = {
             "get_drone_status": lambda _: self.get_drone_status(),
             "inspect_camera": self.inspect_camera,
             "detect_person_in_frame": self.detect_person_in_frame,
             "scan_for_people": self.scan_for_people,
+            "search_for_target": self.search_for_target,
             "takeoff": self.takeoff,
             "goto_position": self.goto_position,
             "goto_relative": self.goto_relative,
             "set_yaw": self.set_yaw,
             "rotate_yaw": self.rotate_yaw,
             "hover": self.hover,
-            "land": lambda _: self.land(),
+            "land": self.land,
+            "safe_abort": self.safe_abort,
             "complete_task": self.complete_task,
         }
 
@@ -126,6 +136,12 @@ class V2RosTools:
     def reset_task(self) -> None:
         self._task_done = False
         self._task_result = None
+        self._abort_requested = False
+        self._abort_reason = ""
+
+    @property
+    def target_found(self) -> bool:
+        return bool(self._memory.target_found)
 
     def execute(self, name: str, args: dict[str, Any]) -> str:
         handler = self._handlers.get(name)
@@ -164,6 +180,12 @@ class V2RosTools:
 
     def _on_image(self, msg: Image) -> None:
         self._last_image = msg
+
+    def _on_battery(self, msg: BatteryState) -> None:
+        if msg.percentage >= 0.0:
+            self._last_battery_pct = float(msg.percentage) * 100.0
+        elif msg.voltage > 0.0:
+            self._last_battery_pct = None
 
     def _publish_setpoint(self) -> None:
         if not self._stream_setpoints:
@@ -261,6 +283,9 @@ class V2RosTools:
             "armed": bool(self._state.armed) if self._have_state else False,
             "mode": str(self._state.mode) if self._have_state else "",
             "pose": pose,
+            "battery_pct": round(self._last_battery_pct, 1) if self._last_battery_pct is not None else None,
+            "target_found": bool(self._memory.target_found),
+            "target_description": self._memory.target_description or None,
             "setpoint": {
                 "x": round(self._cmd_x, 3),
                 "y": round(self._cmd_y, 3),
@@ -293,13 +318,24 @@ class V2RosTools:
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc)}
 
-    def _vlm_person_confirmation(self) -> dict[str, Any]:
-        question = (
-            "Analise esta imagem de busca e resgate. Responda somente JSON válido, sem markdown, "
-            'no formato {"found": boolean, "confidence": "low|medium|high", '
-            '"description": "descrição curta em português"}. '
-            "Marque found=true apenas se houver pessoa ou vítima visível em situação de risco."
-        )
+    def _vlm_person_confirmation(self, target_description: str = "") -> dict[str, Any]:
+        if target_description:
+            question = (
+                "Analise esta imagem de câmera de drone. "
+                f'Objetivo: encontrar uma pessoa que corresponde a esta descrição: "{target_description}". '
+                "Responda somente JSON válido, sem markdown, no formato "
+                '{"found": boolean, "confidence": "low|medium|high", '
+                '"description": "descrição curta em português"}. '
+                "Marque found=true APENAS se a pessoa visível corresponder à descrição pedida; "
+                "se houver pessoa mas ela não corresponder, responda found=false e explique na description."
+            )
+        else:
+            question = (
+                "Analise esta imagem de busca e resgate. Responda somente JSON válido, sem markdown, "
+                'no formato {"found": boolean, "confidence": "low|medium|high", '
+                '"description": "descrição curta em português"}. '
+                "Marque found=true apenas se houver pessoa ou vítima visível em situação de risco."
+            )
         result = self._inspect_image(question)
         if not result.get("ok"):
             return result
@@ -485,6 +521,179 @@ class V2RosTools:
             ensure_ascii=False,
         )
 
+    # ---- busca condicionada à confirmação do alvo ---------------------------
+
+    def _safety_check(self, search_started_monotonic: float) -> tuple[bool, str]:
+        """Condições que interrompem o loop de busca. Retorna (ok, motivo)."""
+        if self._abort_requested:
+            return False, self._abort_reason or "abort solicitado"
+        if not self._connected():
+            return False, "conexão MAVROS perdida"
+        if not self._state.armed:
+            return False, "drone desarmado (falha PX4?)"
+        elapsed = time.monotonic() - search_started_monotonic
+        if elapsed > self._search_timeout_sec:
+            return False, f"tempo máximo de busca excedido ({self._search_timeout_sec:.0f}s)"
+        if (
+            self._last_battery_pct is not None
+            and self._last_battery_pct < self._min_battery_pct
+        ):
+            return (
+                False,
+                f"bateria crítica: {self._last_battery_pct:.0f}% < mínimo {self._min_battery_pct:.0f}%",
+            )
+        return True, ""
+
+    def search_for_target(self, args: dict[str, Any]) -> str:
+        """Busca em loop até o VLM confirmar o alvo da descrição.
+
+        O agente extrai da tarefa as características do alvo (ex.: "mulher,
+        cabelo loiro, camisa azul") e passa em target_description. A descrição
+        é persistida em V2Memory; o loop varia o yaw, roda YOLO por frame e,
+        diante de candidato, pede confirmação ao VLM contra a descrição.
+        Sai por: alvo confirmado | timeout | bateria | perda de conexão | desarme.
+        """
+        if not (self._have_state and self._state.armed and self._state.mode == "OFFBOARD"):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "search_for_target exige drone armado em OFFBOARD; use takeoff antes.",
+                    "diagnostics": self._diagnostics(),
+                },
+                ensure_ascii=False,
+            )
+
+        description = str(args.get("target_description", "")).strip()
+        if not description:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "target_description é obrigatório: informe as características do alvo "
+                        "extraídas da tarefa (ex.: 'mulher, cabelo loiro, camisa azul')."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        # Persiste o alvo na memória da missão (vira target_found=false explícito).
+        self._memory.set_target(description)
+
+        sweeps = int(clamp(float(args.get("sweeps", 3)), 1.0, 6.0))
+        step_deg = clamp(float(args.get("step_deg", 45.0)), 15.0, 120.0)
+        settle_sec = clamp(float(args.get("settle_sec", 1.0)), 0.2, 5.0)
+        confirm_vlm = bool(args.get("confirm_vlm", self._yolo_confirm_vlm))
+        max_steps = max(1, int(round((360.0 / step_deg) * sweeps)))
+
+        t0 = time.monotonic()
+        observations: list[dict[str, Any]] = []
+        candidates_checked = 0
+
+        for idx in range(max_steps):
+            safety_ok, reason = self._safety_check(t0)
+            if not safety_ok:
+                self._memory.add_finding(f"Busca interrompida por segurança: {reason}")
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "found": False,
+                        "target": description,
+                        "abort_reason": reason,
+                        "steps_completed": len(observations),
+                        "candidates_checked": candidates_checked,
+                        "battery_pct": round(self._last_battery_pct, 1)
+                        if self._last_battery_pct is not None
+                        else None,
+                        "observations": observations,
+                        "hint": "Condição de segurança atingida: chame safe_abort.",
+                    },
+                    ensure_ascii=False,
+                )
+
+            if idx > 0:
+                self._cmd_yaw += math.radians(step_deg)
+                self._stream_setpoints = True
+                self._wait(settle_sec)
+
+            yolo = self._run_yolo_detection()
+            if not yolo.get("ok"):
+                observations.append({"step": idx + 1, "ok": False, "error": yolo.get("error")})
+                continue
+
+            observation: dict[str, Any] = {
+                "step": idx + 1,
+                "yaw_deg": round(math.degrees(self._cmd_yaw), 1),
+                "found": False,
+                "yolo": yolo,
+                **self._pose_metadata(),
+            }
+
+            if yolo.get("found"):
+                candidates_checked += 1
+                if confirm_vlm:
+                    vlm = self._vlm_person_confirmation(description)
+                    observation["vlm"] = vlm
+                    observation["found"] = bool(vlm.get("ok") and vlm.get("found"))
+                    observation["confidence"] = vlm.get("confidence", "unknown")
+                    observation["description"] = vlm.get("description", "")
+                else:
+                    observation["found"] = True
+                    observation["confidence"] = "yolo-only"
+
+            observations.append(observation)
+
+            if observation.get("found"):
+                evidence = self._maybe_save_evidence(
+                    {**observation, "event": "target_found", "target": description},
+                    label=f"target_step_{idx + 1:03d}",
+                )
+                if evidence:
+                    observation["evidence"] = evidence
+                self._memory.confirm_target()
+                self._memory.add_finding(
+                    f"ALVO CONFIRMADO no passo {idx + 1} (yaw={observation['yaw_deg']}°): "
+                    f"{observation.get('description', '')}"
+                )
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "found": True,
+                        "target": description,
+                        "step": idx + 1,
+                        "confidence": observation.get("confidence", "unknown"),
+                        "description": observation.get("description", ""),
+                        "evidence": evidence,
+                        "steps_completed": len(observations),
+                        "candidates_checked": candidates_checked,
+                        "observations": observations,
+                        "hint": "Alvo confirmado: agora pode chamar land().",
+                    },
+                    ensure_ascii=False,
+                )
+            # candidato YOLO rejeitado pelo VLM: target_found continua false,
+            # o loop prossegue para a próxima direção.
+
+        # Varreduras esgotadas sem confirmação.
+        return json.dumps(
+            {
+                "ok": True,
+                "found": False,
+                "target": description,
+                "abort_reason": f"varredura completa ({sweeps} volta(s), {max_steps} passos) sem confirmação do alvo",
+                "steps_completed": len(observations),
+                "candidates_checked": candidates_checked,
+                "battery_pct": round(self._last_battery_pct, 1)
+                if self._last_battery_pct is not None
+                else None,
+                "observations": observations,
+                "hint": (
+                    "Alvo não confirmado. Opções: nova search_for_target com padrão diferente "
+                    "(step_deg/settle), goto_relative para novo setor, ou safe_abort se a missão não puder continuar."
+                ),
+            },
+            ensure_ascii=False,
+        )
+
     def takeoff(self, args: dict[str, Any]) -> str:
         if not self._connected():
             return json.dumps({"ok": False, "error": "MAVROS não conectado", "diagnostics": self._diagnostics()}, ensure_ascii=False)
@@ -558,12 +767,58 @@ class V2RosTools:
         self._wait(float(args["duration_sec"]))
         return json.dumps({"ok": True, "duration_sec": float(args["duration_sec"])}, ensure_ascii=False)
 
-    def land(self) -> str:
+    def land(self, args: dict[str, Any] | None = None) -> str:
+        """Pouso normal: exige alvo confirmado. Emergência: force=true ou safe_abort."""
+        args = args or {}
+        force = bool(args.get("force", False))
+        if not self._memory.target_found and not force:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "Pouso normal bloqueado: target_found=false. "
+                        "Continue a busca com search_for_target, ou use safe_abort "
+                        "em emergência (land com force=true também é aceito)."
+                    ),
+                    "target_found": False,
+                    "diagnostics": self._diagnostics(),
+                },
+                ensure_ascii=False,
+            )
         self._stream_setpoints = False
         ok, response = self._set_mode("AUTO.LAND")
         self._wait(1.0)
         return json.dumps(
             {"ok": bool(ok), "response": response[-300:], "diagnostics": self._diagnostics()},
+            ensure_ascii=False,
+        )
+
+    def safe_abort(self, args: dict[str, Any]) -> str:
+        """Aborto por condição de segurança: para setpoints, tenta RTL e cai para LAND."""
+        reason = str(args.get("reason", "condição de segurança acionada"))
+        self._memory.add_action(f"SAFE_ABORT: {reason}")
+        self._stream_setpoints = False
+        rtl_ok, rtl_resp = self._set_mode("AUTO.RTL")
+        response = rtl_resp
+        if not rtl_ok:
+            response = self._set_mode("AUTO.LAND")[1]
+        self._wait(1.0)
+        self._task_done = True
+        self._task_result = {
+            "summary": f"Missão abortada com segurança: {reason}",
+            "success": False,
+            "aborted": True,
+            "abort_reason": reason,
+        }
+        return json.dumps(
+            {
+                "ok": True,
+                "action": "AUTO.RTL" if rtl_ok else "AUTO.LAND (fallback)",
+                "reason": reason,
+                "response": response[-300:],
+                "diagnostics": self._diagnostics(),
+                **self._task_result,
+            },
             ensure_ascii=False,
         )
 

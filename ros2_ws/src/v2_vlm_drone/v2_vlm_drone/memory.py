@@ -12,11 +12,23 @@ class V2Memory:
     home: dict[str, float] | None = None
     findings: list[str] = field(default_factory=list)
     actions: list[str] = field(default_factory=list)
+    # Sinalizador da missão atual — usado pelo agente para decidir pouso.
+    target_found: bool = False
+    target_description: str = ""
 
     def reset_for_task(self, task: str) -> None:
         self.task = task
         self.findings.clear()
         self.actions.clear()
+        self.target_found = False
+        self.target_description = ""
+
+    def set_target(self, description: str) -> None:
+        self.target_description = description
+        self.target_found = False
+
+    def confirm_target(self) -> None:
+        self.target_found = True
 
     def set_home(self, *, x: float, y: float, z: float, yaw: float) -> None:
         if self.home is None:
@@ -34,6 +46,9 @@ class V2Memory:
 
     def summary(self) -> str:
         lines = [f"Task: {self.task or '(none)'}"]
+        if self.target_description:
+            status = "FOUND" if self.target_found else "still searching"
+            lines.append(f"Target: \"{self.target_description}\" [{status}]")
         if self.home:
             lines.append(
                 "Home: "
