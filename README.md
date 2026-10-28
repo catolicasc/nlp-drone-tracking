@@ -1,7 +1,7 @@
 # Oracle Vision V2
 
 Pipeline VLM-only para controlar um drone no Isaac Sim/Pegasus/PX4 via ROS 2 e MAVROS.
-
+[![Assistir ao vídeo](https://img.youtube.com/vi/PeGO8oLBkxs/maxresdefault.jpg)](https://youtu.be/PeGO8oLBkxs)
 ## Estrutura
 
 - `apps/isaac_app/standalone`: simulação Isaac/Pegasus e publicação da câmera.
