@@ -1,14 +1,48 @@
 from __future__ import annotations
 
+import omni.usd
+
+
+def _get_current_stage():
+    """Stage USD atual (substitui omni.isaac.core.utils.stage.get_current_stage no Isaac 6.0)."""
+    return omni.usd.get_context().get_stage()
+
+
+def _is_prim_path_valid(prim_path: str) -> bool:
+    """True se o prim existe no stage (substitui omni.isaac.core.utils.prims.is_prim_path_valid)."""
+    if not prim_path:
+        return False
+    prim = _get_current_stage().GetPrimAtPath(prim_path)
+    return prim is not None and prim.IsValid()
+
+
+def _create_camera_prim(camera_prim_path: str, frequency: int, width: int, height: int):
+    """Cria o prim de câmera via pxr (fallback p/ omni.isaac.sensor.Camera removido no 6.0).
+
+    A resolução do render product é definida pelos inputs do IsaacCreateRenderProduct
+    (ver setup_sensors); os attrs camera:* ficam registrados para compatibilidade.
+    """
+    from pxr import Gf, Sdf, UsdGeom
+
+    stage = _get_current_stage()
+    prim = stage.GetPrimAtPath(camera_prim_path)
+    if not prim or not prim.IsValid():
+        prim = UsdGeom.Camera.Define(stage, camera_prim_path).GetPrim()
+
+    prim.CreateAttribute("camera:frequency", Sdf.ValueTypeNames.Int).Set(int(frequency))
+    prim.CreateAttribute("camera:resolution", Sdf.ValueTypeNames.Int2).Set(
+        Gf.Vec2i(int(width), int(height))
+    )
+    return prim
+
 
 def _ensure_camera_visual_marker(camera_prim_path: str) -> None:
     try:
-        from omni.isaac.core.utils.stage import get_current_stage
         from pxr import Gf, UsdGeom
     except Exception:
         return
 
-    stage = get_current_stage()
+    stage = _get_current_stage()
     marker_path = f"{camera_prim_path}/visual_marker"
 
     cube = UsdGeom.Cube.Define(stage, marker_path)
@@ -44,14 +78,67 @@ def _quat_xyzw_from_rpy_deg(roll_deg: float, pitch_deg: float, yaw_deg: float) -
     return (float(qx), float(qy), float(qz), float(qw))
 
 
+def _quat_xyzw_from_rotation_matrix(m: tuple[tuple[float, float, float], ...]) -> tuple[float, float, float, float]:
+    import math
+
+    m00, m01, m02 = m[0]
+    m10, m11, m12 = m[1]
+    m20, m21, m22 = m[2]
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        qw = 0.25 * s
+        qx = (m21 - m12) / s
+        qy = (m02 - m20) / s
+        qz = (m10 - m01) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        qw = (m21 - m12) / s
+        qx = 0.25 * s
+        qy = (m01 + m10) / s
+        qz = (m02 + m20) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        qw = (m02 - m20) / s
+        qx = (m01 + m10) / s
+        qy = 0.25 * s
+        qz = (m12 + m21) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+        qw = (m10 - m01) / s
+        qx = (m02 + m20) / s
+        qy = (m12 + m21) / s
+        qz = 0.25 * s
+    return (float(qx), float(qy), float(qz), float(qw))
+
+
+def _quat_xyzw_camera_forward_down(pitch_down_deg: float) -> tuple[float, float, float, float]:
+    import math
+
+    pitch = math.radians(float(pitch_down_deg))
+    c = math.cos(pitch)
+    s = math.sin(pitch)
+
+    # USD cameras look along local -Z. The drone frame uses +X as forward.
+    x_right = (0.0, -1.0, 0.0)
+    y_up = (s, 0.0, c)
+    z_back = (-c, 0.0, s)
+    return _quat_xyzw_from_rotation_matrix(
+        (
+            (x_right[0], y_up[0], z_back[0]),
+            (x_right[1], y_up[1], z_back[1]),
+            (x_right[2], y_up[2], z_back[2]),
+        )
+    )
+
+
 def _set_local_xform(prim_path: str, position_xyz: tuple[float, float, float], orientation_xyzw: tuple[float, float, float, float]) -> None:
     try:
-        from omni.isaac.core.utils.stage import get_current_stage
         from pxr import Gf, UsdGeom
     except Exception:
         return
 
-    stage = get_current_stage()
+    stage = _get_current_stage()
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         return
@@ -62,19 +149,99 @@ def _set_local_xform(prim_path: str, position_xyz: tuple[float, float, float], o
     xform = UsdGeom.Xformable(prim)
     xform.ClearXformOpOrder()
     xform.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(float(x), float(y), float(z)))
+    # O prim de câmera criado pelo Isaac já tem xformOp:orient em dupla precisão (quatd);
+    # reutilizar o op com a mesma precisão evita o erro de typeName mismatch.
     xform.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(
         Gf.Quatd(float(qw), Gf.Vec3d(float(qx), float(qy), float(qz)))
     )
 
 
+def _configure_camera_prim(camera_prim_path: str, cam_cfg: dict) -> None:
+    try:
+        from pxr import Gf, UsdGeom
+    except Exception:
+        return
+
+    stage = _get_current_stage()
+    prim = stage.GetPrimAtPath(camera_prim_path)
+    if not prim or not prim.IsValid():
+        return
+
+    camera = UsdGeom.Camera(prim)
+    focal_length = float(cam_cfg.get("focal_length_mm", 18.0))
+    horizontal_aperture = float(cam_cfg.get("horizontal_aperture_mm", 20.955))
+    vertical_aperture = float(cam_cfg.get("vertical_aperture_mm", 15.2908))
+    clipping_range = cam_cfg.get("clipping_range_m", (0.05, 1000.0))
+    focus_distance = float(cam_cfg.get("focus_distance_m", 10.0))
+
+    camera.GetFocalLengthAttr().Set(focal_length)
+    camera.GetHorizontalApertureAttr().Set(horizontal_aperture)
+    camera.GetVerticalApertureAttr().Set(vertical_aperture)
+    camera.GetFocusDistanceAttr().Set(focus_distance)
+    camera.GetClippingRangeAttr().Set(Gf.Vec2f(float(clipping_range[0]), float(clipping_range[1])))
+    print(
+        "[setup_sensors] Camera optics: "
+        f"focal_length_mm={focal_length}, horizontal_aperture_mm={horizontal_aperture}, "
+        f"vertical_aperture_mm={vertical_aperture}, clipping_range_m={clipping_range}"
+    )
+
+
+def _apply_pinhole_intrinsics(camera_prim_path: str, cam_cfg: dict, width: int, height: int, cam) -> None:
+    """Aplica o modelo pinhole OpenCV com intrínsecas explícitas no prim da câmera.
+
+    Idiom do MonocularCamera do Pegasus (set_lens_distortion_model +
+    set_opencv_pinhole_properties): grava a schema OmniLensDistortionOpenCvPinholeAPI
+    e os attrs omni:lensdistortion:opencvPinhole:{fx,fy,cx,cy}, que o
+    ROS2CameraInfoHelper usa para publicar camera_info exato (em vez de derivar
+    do renderer). Sem o objeto Camera (fallback pxr), grava os mesmos attrs.
+    """
+    focal_length = float(cam_cfg.get("focal_length_mm", 18.0))
+    horizontal_aperture = float(cam_cfg.get("horizontal_aperture_mm", 20.955))
+    vertical_aperture = float(cam_cfg.get("vertical_aperture_mm", horizontal_aperture * height / width))
+
+    fx = focal_length * width / horizontal_aperture
+    fy = focal_length * height / vertical_aperture
+    cx = width / 2.0
+    cy = height / 2.0
+
+    applied = False
+    if cam is not None:
+        try:
+            cam.set_lens_distortion_model("OmniLensDistortionOpenCvPinholeAPI")
+            cam.set_opencv_pinhole_properties(cx=cx, cy=cy, fx=fx, fy=fy)
+            applied = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[setup_sensors] Camera API de intrínsecas falhou ({e}); aplicando via pxr.")
+
+    if not applied:
+        from pxr import Sdf
+
+        stage = _get_current_stage()
+        prim = stage.GetPrimAtPath(camera_prim_path)
+        if not prim or not prim.IsValid():
+            return
+        prim.ApplyAPI("OmniLensDistortionOpenCvPinholeAPI")
+        prim.CreateAttribute("omni:lensdistortion:model", Sdf.ValueTypeNames.Token).Set("opencvPinhole")
+        for name, value in (("fx", fx), ("fy", fy), ("cx", cx), ("cy", cy)):
+            prim.CreateAttribute(
+                f"omni:lensdistortion:opencvPinhole:{name}", Sdf.ValueTypeNames.Float
+            ).Set(float(value))
+
+    print(
+        "[setup_sensors] Intrínsecas pinhole aplicadas: "
+        f"fx={fx:.2f} fy={fy:.2f} cx={cx:.2f} cy={cy:.2f} "
+        f"(focal_length_mm={focal_length}, h_aperture_mm={horizontal_aperture}, "
+        f"v_aperture_mm={vertical_aperture:.4f})"
+    )
+
+
 def _print_world_translation(prim_path: str, label: str) -> None:
     try:
-        from omni.isaac.core.utils.stage import get_current_stage
         from pxr import UsdGeom
     except Exception:
         return
 
-    stage = get_current_stage()
+    stage = _get_current_stage()
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         return
@@ -96,10 +263,14 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
 
     width = int(cam_cfg.get("width", 1280))
     height = int(cam_cfg.get("height", 720))
+    frequency = int(cam_cfg.get("frequency", 30))
 
     pos_cfg = cam_cfg.get("position", (0.0, 0.0, 0.0))
     cam_orientation: tuple[float, float, float, float]
-    if "orientation_xyzw" in cam_cfg:
+    orientation_mode = str(cam_cfg.get("orientation_mode", "forward_down")).strip().lower()
+    if orientation_mode == "forward_down":
+        cam_orientation = _quat_xyzw_camera_forward_down(float(cam_cfg.get("pitch_down_deg", 25.0)))
+    elif "orientation_xyzw" in cam_cfg:
         ori_cfg = cam_cfg.get("orientation_xyzw", (0.0, 0.0, 0.0, 1.0))
         cam_orientation = (float(ori_cfg[0]), float(ori_cfg[1]), float(ori_cfg[2]), float(ori_cfg[3]))
     elif "orientation_rpy_deg" in cam_cfg:
@@ -116,8 +287,6 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
     mount_parent = str(drone_prim_path)
     mount_prim = str(cam_cfg.get("mount_prim", "")).strip()
     try:
-        from omni.isaac.core.utils.prims import is_prim_path_valid
-
         configured_mount_parent: str | None = None
         if mount_prim:
             if mount_prim.startswith("/"):
@@ -125,7 +294,7 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
             else:
                 configured_mount_parent = f"{drone_prim_path}/{mount_prim}"
 
-        if configured_mount_parent and is_prim_path_valid(configured_mount_parent):
+        if configured_mount_parent and _is_prim_path_valid(configured_mount_parent):
             mount_parent = configured_mount_parent
             print(f"[setup_sensors] Configured camera mount parent: {mount_parent}")
         else:
@@ -144,7 +313,7 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
             ]
             found = []
             for p in candidates:
-                if is_prim_path_valid(p):
+                if _is_prim_path_valid(p):
                     found.append(p)
 
             if found:
@@ -161,22 +330,31 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
     camera_prim_path = f"{mount_parent}/camera"
     print(f"[setup_sensors] Camera prim path: {camera_prim_path}")
 
+    # Isaac Sim 6.0: omni.isaac.sensor.Camera foi removido. Usa isaacsim.sensors.camera
+    # (deprecado mas presente, mesma stack do MonocularCamera do Pegasus) com fallback pxr.
+    cam = None
     try:
-        from omni.isaac.sensor import Camera
-    except Exception as e:  # noqa: BLE001
-        print(f"Não foi possível importar Camera do Isaac: {e}")
-        return None
+        from isaacsim.sensors.camera.camera import Camera as _IsaacCamera
 
-    cam = Camera(
-        prim_path=camera_prim_path,
-        position=(0.0, 0.0, 0.0),
-        orientation=(0.0, 0.0, 0.0, 1.0),
-        frequency=30,
-        resolution=(width, height),
-    )
-    cam.initialize()
+        cam = _IsaacCamera(
+            prim_path=camera_prim_path,
+            position=(0.0, 0.0, 0.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            frequency=frequency,
+            resolution=(width, height),
+        )
+        cam.initialize()
+    except Exception as e:  # noqa: BLE001
+        print(f"[setup_sensors] Camera do isaacsim.sensors.camera indisponível ({e}); criando prim via pxr.")
+        _create_camera_prim(camera_prim_path, frequency, width, height)
 
     _set_local_xform(camera_prim_path, cam_position, cam_orientation)
+    _configure_camera_prim(camera_prim_path, cam_cfg)
+    _apply_pinhole_intrinsics(camera_prim_path, cam_cfg, width, height, cam)
+    print(
+        "[setup_sensors] Camera mount config: "
+        f"position={cam_position}, orientation_mode={orientation_mode}, orientation_xyzw={cam_orientation}"
+    )
     _print_world_translation(camera_prim_path, "Camera")
 
     if bool(cam_cfg.get("visualize", True)):
@@ -185,9 +363,11 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
     try:
         import omni.graph.core as og
 
-        from isaacsim.core.utils.stage import get_next_free_path
+        from omni.usd import get_stage_next_free_path
 
-        graph_path = get_next_free_path(cam_cfg.get("graph_path", "/Graph/ROS_Camera"), "")
+        graph_path = get_stage_next_free_path(
+            _get_current_stage(), cam_cfg.get("graph_path", "/Graph/ROS_Camera"), ""
+        )
         node_namespace = cam_cfg.get("namespace", "drone/camera")
         image_topic = cam_cfg.get("topic", "image_raw")
         publish_depth = bool(cam_cfg.get("publish_depth", False))
@@ -215,6 +395,8 @@ def setup_sensors(config: dict, drone_prim_path: str = "/World/quadrotor"):
         ]
         set_values = [
             ("RenderProduct.inputs:cameraPrim", camera_prim_path),
+            ("RenderProduct.inputs:width", width),
+            ("RenderProduct.inputs:height", height),
             ("CameraInfoPublish.inputs:topicName", info_topic),
             ("CameraInfoPublish.inputs:frameId", frame_id),
             ("CameraInfoPublish.inputs:nodeNamespace", node_namespace),

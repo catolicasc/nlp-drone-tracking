@@ -1,0 +1,53 @@
+{
+  "step": 2,
+  "yaw_deg": 958.9,
+  "found": true,
+  "yolo": {
+    "ok": true,
+    "found": true,
+    "count": 1,
+    "best": {
+      "class_id": 0,
+      "class_name": "person",
+      "confidence": 0.8649,
+      "bbox_xyxy": [
+        356.1,
+        1.4,
+        429.8,
+        233.9
+      ]
+    },
+    "detections": [
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.8649,
+        "bbox_xyxy": [
+          356.1,
+          1.4,
+          429.8,
+          233.9
+        ]
+      }
+    ],
+    "backend": "yolo",
+    "model": "yolov8n.pt"
+  },
+  "pose": {
+    "x": 0.012,
+    "y": 0.008,
+    "z": 2.026,
+    "yaw_deg": -154.3
+  },
+  "setpoint_yaw_deg": 958.9,
+  "vlm": {
+    "ok": true,
+    "found": true,
+    "confidence": "medium",
+    "description": "Pessoa visível em situação de risco.",
+    "raw_answer": "{\"found\": true, \"confidence\": \"medium\", \"description\": \"Pessoa visível em situação de risco.\"}"
+  },
+  "confidence": "medium",
+  "description": "Pessoa visível em situação de risco.",
+  "event": "scan_person_found"
+}

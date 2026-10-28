@@ -51,12 +51,13 @@ def resolve_airframe(explicit: str | None) -> str:
     return os.environ.get("PX4_AIRFRAME") or pg.px4_default_airframe or "gazebo-classic_iris"
 
 
-def spawn_pegasus_quadrotor(world, px4_path: str, spec: PegasusQuadrotorSpec | None = None) -> None:
+def spawn_pegasus_quadrotor(px4_path: str, spec: PegasusQuadrotorSpec | None = None) -> None:
     if spec is None:
         spec = PegasusQuadrotorSpec()
 
     pg = PegasusInterface()
-    pg._world = world
+    # Isaac Sim 6.0: aplica settings de simulação (physics dt 1/250 p/ PX4) via SimulationManager.
+    pg.initialize_world()
     pg.set_px4_path(px4_path)
 
     airframe = resolve_airframe(spec.airframe)

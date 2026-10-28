@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """
-Oracle Vision — standalone Isaac Sim app (padrão Pegasus).
+Oracle Vision — standalone Isaac Sim app (padrão Pegasus, Isaac Sim 6.0).
 
 Bootstrap via SimulationApp; lógica de simulação na classe OracleVisionApp.
+
+Isaac Sim 6.0: a classe World foi removida → SimulationManager/RenderingManager
+com callbacks de simulação/render; o loop usa simulation_app.update().
 """
 
 from __future__ import annotations
@@ -31,25 +34,83 @@ if _pegasus_path:
 
 import carb
 from isaacsim import SimulationApp
+from config_loader import load_config as _load_config
+
+# O config precisa ser lido antes do SimulationApp para decidir se a extensão
+# do IRA (pessoas animadas) entra no bootstrap via --enable.
+try:
+    _bootstrap_config, _bootstrap_root = _load_config()
+    _PEOPLE_ANIMATED = bool((_bootstrap_config.get("people", {}) or {}).get("animated", False))
+except Exception:
+    _bootstrap_config = {}
+    _bootstrap_root = Path.cwd()
+    _PEOPLE_ANIMATED = False
+
+# Só é True se o setup do IRA de fato concluiu (ver _setup_ira_people); o
+# _setup_people usa isso para decidir entre pessoas IRA e spawn estático.
+_IRA_PEOPLE_LOADED = False
+
+_extra_args = ["--enable", "isaacsim.ros2.bridge"]
+if _PEOPLE_ANIMATED:
+    # omni.behavior.scripting.core: dependência do runtime de behaviors do
+    # metropolis pipeline (experience oficial actor_sdg habilita explicitamente).
+    _extra_args += [
+        "--enable", "isaacsim.replicator.agent.core",
+        "--enable", "omni.behavior.scripting.core",
+    ]
 
 _HEADLESS = os.getenv("HEADLESS", "0").strip().lower() in {"1", "true", "yes"}
 simulation_app = SimulationApp(
     {
         "headless": _HEADLESS,
-        "extra_args": ["--enable", "isaacsim.ros2.bridge"],
+        "extra_args": _extra_args,
     }
 )
 
 import omni.timeline
-from omni.isaac.core import World
-from omni.isaac.core.utils.prims import is_prim_path_valid
-from omni.isaac.core.utils.stage import add_reference_to_stage, get_current_stage
-from omni.isaac.nucleus import get_assets_root_path
-from pxr import Usd, UsdGeom, UsdLux
+import omni.usd
+from isaacsim.core.rendering_manager import RenderingManager, RenderingEvent
+from isaacsim.core.simulation_manager import SimulationManager, SimulationEvent
+import isaacsim.core.experimental.utils.stage as _stage_utils
+from isaacsim.storage.native import get_assets_root_path
+from pxr import Gf, Usd, UsdGeom, UsdLux, UsdPhysics
 
 from config_loader import load_config, resolve_usd_path
 from sensors import setup_sensors
 from spawn import PegasusQuadrotorSpec, PersonSpawnSpec, spawn_pegasus_quadrotor, spawn_people
+
+
+def _get_stage():
+    """Stage USD atual (substitui omni.isaac.core.utils.stage.get_current_stage)."""
+    return omni.usd.get_context().get_stage()
+
+
+def _is_prim_path_valid(prim_path: str) -> bool:
+    """True se o prim existe no stage (substitui omni.isaac.core.utils.prims.is_prim_path_valid)."""
+    if not prim_path:
+        return False
+    prim = _get_stage().GetPrimAtPath(prim_path)
+    return prim is not None and prim.IsValid()
+
+
+def _add_reference_to_stage(usd_path: str, prim_path: str) -> None:
+    """Referencia um USD no stage (substitui omni.isaac.core.utils.stage.add_reference_to_stage)."""
+    _stage_utils.add_reference_to_stage(usd_path=usd_path, path=prim_path)
+
+
+def _add_default_ground_plane(size: float = 250.0) -> None:
+    """Ground plane com colisão via USD puro (padrão do exemplo 0_template do Pegasus 6.0).
+
+    Cubo fino com topo em z=0 (superfície do chão).
+    """
+    stage = _get_stage()
+    ground = UsdGeom.Cube.Define(stage, "/World/DefaultGroundPlane")
+    ground.GetSizeAttr().Set(size)
+    xform = UsdGeom.Xformable(ground.GetPrim())
+    thickness = size * 0.02
+    xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.5 * thickness))
+    xform.AddScaleOp().Set(Gf.Vec3d(1.0, 1.0, 0.02))
+    UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
 
 
 class PersonFoundListener:
@@ -101,13 +162,12 @@ class PersonFoundListener:
 
 
 class OracleVisionApp:
-    """App standalone: World + cena + drone Pegasus/PX4 + sensores + callbacks."""
+    """App standalone: stage + cena + drone Pegasus/PX4 + sensores + callbacks."""
 
     def __init__(self) -> None:
         self.config, self.project_root = load_config()
         self.timeline = omni.timeline.get_timeline_interface()
         self.stop_sim = False
-        self._sim_started = False
 
         self._light = None
         self._person_found_listener: PersonFoundListener | None = None
@@ -116,15 +176,10 @@ class OracleVisionApp:
 
         self._print_banner()
 
-        if World.instance():
-            World.instance().clear_instance()
-
-        self.world = World(stage_units_in_meters=1.0)
         self._setup_world()
         self._setup_people()
         self._setup_drone_and_sensors()
         self._register_callbacks()
-        self.world.reset()
 
         print("Cena pronta.")
 
@@ -139,9 +194,22 @@ class OracleVisionApp:
         print(f"PX4_PATH={os.getenv('PX4_PATH')}")
 
     def _setup_world(self) -> None:
-        self.world.scene.add_default_ground_plane()
+        # No modo animado o IRA abre o assets/ira_ground.usda como stage raiz
+        # (chão 40 m + luz): não recriar/sobrescrever o que já existe.
+        if not _is_prim_path_valid("/World/DefaultGroundPlane"):
+            _add_default_ground_plane()
         self._load_usd_scene()
         self._load_isaac_environment()
+        if not _is_prim_path_valid("/World/Light/DomeLight"):
+            self._setup_lighting()
+
+    def _setup_lighting(self) -> None:
+        # Sem nenhuma luz na stage o RTX renderiza tudo preto (câmera e viewport);
+        # dome light branca no lugar da HDR do S3 para não depender de streaming.
+        stage = _get_stage()
+        light = UsdLux.DomeLight.Define(stage, "/World/Light/DomeLight")
+        light.CreateIntensityAttr(5e3)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
 
     def _load_usd_scene(self) -> None:
         usd_cfg = self.config.get("world", {}).get("usd")
@@ -156,8 +224,8 @@ class OracleVisionApp:
             return
 
         prim_path = "/World/Environment"
-        if not is_prim_path_valid(prim_path):
-            add_reference_to_stage(usd_path=usd_full_path, prim_path=prim_path)
+        if not _is_prim_path_valid(prim_path):
+            _add_reference_to_stage(usd_path=usd_full_path, prim_path=prim_path)
             print(f"USD carregado em {prim_path}")
 
     def _load_isaac_environment(self) -> None:
@@ -172,12 +240,12 @@ class OracleVisionApp:
 
         usd_path = f"{assets_root}/Isaac/{str(world_asset_rel).lstrip('/')}"
         prim_path = "/World/Environment"
-        if not is_prim_path_valid(prim_path):
-            add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
+        if not _is_prim_path_valid(prim_path):
+            _add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
             print(f"Ambiente Isaac carregado em {prim_path}: {usd_path}")
 
     def _spawn_bounds_from_default_prim(self) -> tuple[tuple[float, float], float] | None:
-        stage = get_current_stage()
+        stage = _get_stage()
         default_prim = stage.GetDefaultPrim()
         if not default_prim or not default_prim.IsValid():
             return None
@@ -205,6 +273,10 @@ class OracleVisionApp:
             return None
 
     def _setup_people(self) -> None:
+        if _IRA_PEOPLE_LOADED:
+            print("Pessoas animadas (IRA) já carregadas no setup do stage; spawn estático ignorado.")
+            return
+
         people_cfg = self.config.get("people", {}) or {}
         n_people = int(people_cfg.get("count", 20))
         if n_people <= 0:
@@ -250,7 +322,8 @@ class OracleVisionApp:
             print("Não consegui localizar os assets do Isaac Sim.")
             return
 
-        asset_rel_path = "People/Characters/original_male_adult_police_04/male_adult_police_04.usd"
+        # Asset do personagem no Isaac 6.0 (em 5.1 era original_male_adult_police_04).
+        asset_rel_path = "People/Characters/male_adult_police_04/male_adult_police_04.usd"
         min_d_requested = max(0.0, float(min_distance_m))
         half = max(1.0, float(area_half_extent_m))
         cx, cy = float(area_center_xy[0]), float(area_center_xy[1])
@@ -314,7 +387,6 @@ class OracleVisionApp:
                 pass
 
         spawn_pegasus_quadrotor(
-            self.world,
             px4_path,
             PegasusQuadrotorSpec(init_pos=drone_pos),
         )
@@ -325,7 +397,7 @@ class OracleVisionApp:
         self._person_found_listener.start()
 
     def _ensure_drone_light(self, drone_prim_path: str):
-        stage = get_current_stage()
+        stage = _get_stage()
         light_path = f"{drone_prim_path}/person_light"
         light = UsdLux.SphereLight.Define(stage, light_path)
         light.CreateRadiusAttr(0.05)
@@ -334,10 +406,14 @@ class OracleVisionApp:
         return light
 
     def _register_callbacks(self) -> None:
-        self.world.add_render_callback("oracle_vision_drone_light", self._render_callback)
-        self.world.add_timeline_callback("oracle_vision_timeline", self._timeline_callback)
+        self._cb_render = RenderingManager.register_callback(
+            RenderingEvent.NEW_FRAME, callback=self._render_callback
+        )
+        self._cb_stop = SimulationManager.register_callback(
+            self._on_sim_stopped, SimulationEvent.SIMULATION_STOPPED
+        )
 
-    def _render_callback(self, _data) -> None:
+    def _render_callback(self, event) -> None:
         if self._light is None or self._person_found_listener is None:
             return
 
@@ -358,24 +434,139 @@ class OracleVisionApp:
         except Exception:
             pass
 
-    def _timeline_callback(self, _timeline_event) -> None:
-        if self._sim_started and self.world.is_stopped():
-            self.stop_sim = True
+    def _on_sim_stopped(self, *args) -> None:
+        self.stop_sim = True
 
     def run(self) -> None:
         self.stop_sim = False
         self.timeline.play()
-        self._sim_started = True
 
         while simulation_app.is_running() and not self.stop_sim:
-            self.world.step(render=True)
+            simulation_app.update()
 
         carb.log_warn("Oracle Vision simulation app is closing.")
+        SimulationManager.deregister_callback(self._cb_stop)
+        RenderingManager.deregister_callback(self._cb_render)
         self.timeline.stop()
         simulation_app.close()
 
 
+def _patch_ira_navmesh_bake() -> None:
+    """Garante que o bake da NavMesh conclua antes do spawn dos personagens.
+
+    O `ensure_navmesh_ready` do IRA considera a navmesh pronta assim que
+    `get_navmesh()` devolve um objeto — que existe (vazio) antes do bake
+    terminar — e os personagens nascem todos na origem. Esta versão assa
+    bloqueante (`start_navmesh_baking_and_wait`) e só aceita malha não-vazia
+    (`get_mesh_signature() != 0`).
+    """
+    import omni.anim.navigation.core as nav
+
+    import isaacsim.replicator.agent.core.scene_assembly.environment_loader as _env_loader
+
+    async def _ensure_navmesh_ready() -> bool:
+        inav = nav.acquire_interface()
+        if inav is None:
+            carb.log_error("[ira] interface de navegação indisponível")
+            return False
+        navmesh = inav.get_navmesh()
+        if navmesh is not None and navmesh.get_mesh_signature() != 0:
+            return True
+        try:
+            if not inav.start_navmesh_baking_and_wait():
+                carb.log_error("[ira] bake da NavMesh falhou (NavMeshVolume ausente?)")
+                return False
+        except Exception as exc:  # noqa: BLE001
+            carb.log_error(f"[ira] erro no bake da NavMesh: {exc}")
+            return False
+        navmesh = inav.get_navmesh()
+        ok = navmesh is not None and navmesh.get_mesh_signature() != 0
+        if ok:
+            print("[ira] NavMesh assada com sucesso")
+        else:
+            carb.log_error("[ira] bake da NavMesh concluiu com malha vazia")
+        return ok
+
+    _env_loader.ensure_navmesh_ready = _ensure_navmesh_ready
+
+
+def _setup_ira_people(config: dict, project_root) -> bool:
+    """Soba o pipeline IRA de pessoas animadas como dono do stage raiz.
+
+    Idiom do exemplo oficial tools/actor_sdg/actor_sdg.py: o IRA abre o
+    environment (nosso assets/ira_ground.usda) como camada raiz, assa o NavMesh
+    e spawna os personagens com rotina wander. O drone Pegasus e a câmera são
+    adicionados depois, em cima do stage aberto pelo IRA. A extensão precisa
+    ter sido habilitada no bootstrap (ver extra_args do SimulationApp).
+    """
+    try:
+        import yaml as _yaml
+
+        import carb as _carb
+        from isaacsim.replicator.agent.core import api as IRA
+        from isaacsim.replicator.agent.core.configuration.models.root import RootConfig
+    except Exception as e:  # noqa: BLE001
+        print(f"[ira] extensão isaacsim.replicator.agent.core indisponível ({e}); uso pessoas estáticas")
+        return False
+
+    _patch_ira_navmesh_bake()
+
+    settings = _carb.settings.get_settings()
+    settings.set("/app/scripting/ignoreWarningDialog", True)
+    settings.set("/app/omni.graph.scriptnode/enable_opt_in", False)
+    settings.set("/rtx/raytracing/fractionalCutoutOpacity", True)  # personagens DH
+    # Baker de NavMesh: GPU (default) trava em headless sem CUDA; CPU pode
+    # produzir navmesh vazia em alguns cenários. Default: GPU no GUI, CPU no
+    # headless. NAVMESH_USE_GPU=0 força CPU.
+    _nav_gpu = os.getenv("NAVMESH_USE_GPU", "0" if _HEADLESS else "1").strip().lower() in {"1", "true", "yes"}
+    settings.set("/persistent/exts/omni.anim.navigation.core/navMesh/useGpu", _nav_gpu)
+
+    people_cfg = config.get("people", {}) or {}
+    template_path = Path(project_root) / str(people_cfg.get("ira_config", "config/ira_people.yaml"))
+    try:
+        with open(template_path) as f:
+            data = _yaml.safe_load(f)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ira] template {template_path} ilegível ({e}); uso pessoas estáticas")
+        return False
+
+    ira = data["isaacsim.replicator.agent"]
+    ira["environment"]["base_stage_asset_path"] = str(
+        Path(__file__).resolve().parent / "assets" / "ira_ground.usda"
+    )
+    group = next(iter(ira["character"]["groups"].values()))
+    group["num"] = int(people_cfg.get("count", 10))
+
+    IRA.set_config(RootConfig.model_validate(data))
+    if IRA.get_config_file() is None:
+        print("[ira] config inválida; uso pessoas estáticas")
+        return False
+
+    async def _run():
+        await IRA.setup_simulation()
+        # Ativa as rotinas dos personagens (wander/idle) — sem isso o setup
+        # carrega os personagens parados (idiom do tools/actor_sdg oficial).
+        await IRA.start_data_generation_async()
+
+    from omni.kit.async_engine import run_coroutine
+
+    task = run_coroutine(_run())
+    while not task.done():
+        simulation_app.update()
+    if task.exception() is not None:
+        print(f"[ira] setup_simulation falhou: {task.exception()!r}; uso pessoas estáticas")
+        return False
+
+    print(f"[ira] {group['num']} pessoas animadas (wander) carregadas")
+    global _IRA_PEOPLE_LOADED
+    _IRA_PEOPLE_LOADED = True
+    return True
+
+
 def main() -> None:
+    if _PEOPLE_ANIMATED:
+        # Ordem obrigatória: IRA primeiro (abre o stage raiz); drone/câmera depois.
+        _setup_ira_people(_bootstrap_config, _bootstrap_root)
     OracleVisionApp().run()
 
 

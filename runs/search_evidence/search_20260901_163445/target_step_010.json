@@ -1,0 +1,76 @@
+{
+  "step": 10,
+  "yaw_deg": 538.4,
+  "found": true,
+  "yolo": {
+    "ok": true,
+    "found": true,
+    "count": 3,
+    "best": {
+      "class_id": 0,
+      "class_name": "person",
+      "confidence": 0.7932,
+      "bbox_xyxy": [
+        869.0,
+        120.0,
+        913.7,
+        210.8
+      ]
+    },
+    "detections": [
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.7932,
+        "bbox_xyxy": [
+          869.0,
+          120.0,
+          913.7,
+          210.8
+        ]
+      },
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.6866,
+        "bbox_xyxy": [
+          296.6,
+          59.8,
+          320.5,
+          140.7
+        ]
+      },
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.3591,
+        "bbox_xyxy": [
+          297.3,
+          99.2,
+          320.4,
+          141.2
+        ]
+      }
+    ],
+    "backend": "yolo",
+    "model": "yolov8n.pt"
+  },
+  "pose": {
+    "x": -0.086,
+    "y": -0.099,
+    "z": 5.195,
+    "yaw_deg": -101.5
+  },
+  "setpoint_yaw_deg": 538.4,
+  "vlm": {
+    "ok": true,
+    "found": true,
+    "confidence": "high",
+    "description": "Pessoa com camisa vermelha e calças verdes.",
+    "raw_answer": "{\"found\":true,\"confidence\":\"high\",\"description\":\"Pessoa com camisa vermelha e calças verdes.\"}"
+  },
+  "confidence": "high",
+  "description": "Pessoa com camisa vermelha e calças verdes.",
+  "event": "target_found",
+  "target": "pessoa de camisa vermelha"
+}

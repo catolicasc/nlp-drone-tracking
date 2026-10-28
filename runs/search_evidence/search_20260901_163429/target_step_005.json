@@ -1,0 +1,65 @@
+{
+  "step": 5,
+  "yaw_deg": 237.9,
+  "found": true,
+  "yolo": {
+    "ok": true,
+    "found": true,
+    "count": 2,
+    "best": {
+      "class_id": 0,
+      "class_name": "person",
+      "confidence": 0.7254,
+      "bbox_xyxy": [
+        133.5,
+        167.2,
+        172.4,
+        240.2
+      ]
+    },
+    "detections": [
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.7254,
+        "bbox_xyxy": [
+          133.5,
+          167.2,
+          172.4,
+          240.2
+        ]
+      },
+      {
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": 0.5384,
+        "bbox_xyxy": [
+          389.6,
+          274.1,
+          430.7,
+          367.0
+        ]
+      }
+    ],
+    "backend": "yolo",
+    "model": "yolov8n.pt"
+  },
+  "pose": {
+    "x": 0.023,
+    "y": -0.022,
+    "z": 7.288,
+    "yaw_deg": -131.5
+  },
+  "setpoint_yaw_deg": 237.9,
+  "vlm": {
+    "ok": true,
+    "found": true,
+    "confidence": "high",
+    "description": "A pessoa à esquerda está usando uma camisa vermelha.",
+    "raw_answer": "{\"found\":true,\"confidence\":\"high\",\"description\":\"A pessoa à esquerda está usando uma camisa vermelha.\"}"
+  },
+  "confidence": "high",
+  "description": "A pessoa à esquerda está usando uma camisa vermelha.",
+  "event": "target_found",
+  "target": "pessoa de camisa vermelha"
+}

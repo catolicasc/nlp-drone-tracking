@@ -1,0 +1,81 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+# Mundo mínimo para o pipeline IRA (pessoas animadas): chão de 40 m em
+# UsdGeom.Mesh + dome light. O NavMesh do IRA cobre ±20 m, casando com
+# spawn_area_half_extent_m do sim.yaml.
+#
+# NOTAS DO BAKER DO NAVMESH (omni.anim.navigation.core 110.1.4, Isaac 6.0.1):
+# - A config do bake (agentMaxRadius, agentMinIslandRadius, ...) vive nos carb
+#   settings /exts/.../navMesh/config/* em CENTÍMETROS. Um customLayerData
+#   "navmeshSettings" no stage é lido e ZERA os parâmetros → navmesh vazia.
+#   Não autorar esses dados aqui.
+# - O collector só aceita Mesh com normals (faceVarying); 2 triângulos sem
+#   normals não são coletados. Quad + normals funciona (estilo TestNavMesh.usda
+#   oficial da extensão).
+def Xform "World"
+{
+    # O bake do NavMesh amostra colisão via PhysX — sem PhysicsScene no stage o
+    # bake nunca conclui (Pegasus só criaria a cena depois do setup do IRA).
+    # ATENÇÃO aos sinais: gravity = direction * magnitude. Magnitude é
+    # POSITIVA (9.81) com direction (0,0,-1). Com magnitude=-9.81 a gravidade
+    # aponta para CIMA e o drone "cai para cima" (sintoma: sobe sem parar e o
+    # HIL_GPS estoura int16 com velocity_down ~ -32768).
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, 0, -1)
+        float physics:gravityMagnitude = 9.81
+    }
+
+    # Chão visual: quad com normals faceVarying (requisito do baker do NavMesh).
+    def Mesh "DefaultGroundPlane"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 3, 2]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "faceVarying"
+        )
+        point3f[] points = [(-20, -20, 0), (20, -20, 0), (-20, 20, 0), (20, 20, 0)]
+        color3f[] primvars:displayColor = [(1, 1, 1)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    # Colisão de física para o drone (topo em z=0, alinhado ao Mesh): rigid
+    # bodies não entram no bake do NavMesh (default), então este Cube só
+    # serve à física.
+    def Cube "PhysicsGround" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 40
+        double3 xformOp:translate = (0, 0, -0.4)
+        float3 xformOp:scale = (1, 1, 0.02)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Xform "Light"
+    {
+        def DomeLight "DomeLight"
+        {
+            float inputs:intensity = 5000
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+
+    # Volume de bake do NavMesh (equivalente ao CreateNavMeshVolumeCommand com
+    # volume_type=Include): extent ±0.5 com escala 40 → cobre ±20 m em XZY.
+    def NavMeshVolume "NavMeshVolume" (
+        prepend apiSchemas = ["NavMeshAreaAPI"]
+    )
+    {
+        uniform token nav:volume:type = "Include"
+        float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+        double3 xformOp:translate = (0, 0, 0)
+        float3 xformOp:scale = (40, 40, 40)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}

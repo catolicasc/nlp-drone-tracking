@@ -1,0 +1,29 @@
+# Postgres para experimentos do UAV V2.
+#
+# Uso:
+#   docker compose up -d          # sobe o banco
+#   docker compose exec -T postgres psql -U v2 -d v2_experiments -f /schema.sql  # aplica schema
+#   docker compose down           # para (dados persistem no volume pgdata)
+#
+# Credenciais default (dev): v2 / v2. Sobrescreva via .env se precisar.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: v2_experiments_pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-v2_experiments}
+      POSTGRES_USER: ${POSTGRES_USER:-v2}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-v2}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-v2} -d ${POSTGRES_DB:-v2_experiments}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

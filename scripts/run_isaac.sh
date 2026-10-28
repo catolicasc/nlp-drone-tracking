@@ -15,7 +15,16 @@ if [ -z "${ISAAC_SIM_PATH:-}" ]; then
   exit 1
 fi
 
-ISAAC_PYTHON="${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh"
+# Isaac Sim 5.1 (source build): _build/linux-x86_64/release/python.sh
+# Isaac Sim 6.0 (standalone): python.sh na raiz da instalação
+if [ -x "${ISAAC_SIM_PATH}/python.sh" ]; then
+  ISAAC_PYTHON="${ISAAC_SIM_PATH}/python.sh"
+elif [ -x "${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh" ]; then
+  ISAAC_PYTHON="${ISAAC_SIM_PATH}/_build/linux-x86_64/release/python.sh"
+else
+  echo "Erro: não encontrei python.sh do Isaac Sim em $ISAAC_SIM_PATH"
+  exit 1
+fi
 SCRIPT_PATH="$PROJECT_ROOT/apps/isaac_app/standalone/main.py"
 
 if [ ! -x "$ISAAC_PYTHON" ]; then
@@ -23,32 +32,50 @@ if [ ! -x "$ISAAC_PYTHON" ]; then
   exit 1
 fi
 
-# Evita conflito entre ROS 2 do sistema e o Python do Isaac (padrão Pegasus isaac_run).
-unset ROS_VERSION ROS_PYTHON_VERSION AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH || true
-for ros_path in /opt/ros/humble /opt/ros/jazzy /opt/ros/iron; do
-  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-    LD_LIBRARY_PATH="$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -v "^${ros_path}" | paste -sd':' - || true)"
-  fi
-done
-export LD_LIBRARY_PATH
-
 if [ -f /etc/os-release ]; then
   UBUNTU_VERSION="$(grep '^VERSION_ID=' /etc/os-release | cut -d'"' -f2)"
 else
   UBUNTU_VERSION=""
 fi
 
-if [[ "$UBUNTU_VERSION" == "24.04" ]]; then
-  export ROS_DISTRO=jazzy
-  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${ISAAC_SIM_PATH}/exts/isaacsim.ros2.bridge/jazzy/lib"
-elif [ -n "$UBUNTU_VERSION" ]; then
-  export ROS_DISTRO=humble
-  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${ISAAC_SIM_PATH}/exts/isaacsim.ros2.bridge/humble/lib"
+if [ -z "${ROS_DISTRO:-}" ]; then
+  if [[ "$UBUNTU_VERSION" == "24.04" ]]; then
+    export ROS_DISTRO=jazzy
+  else
+    export ROS_DISTRO=humble
+  fi
+fi
+
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+
+ISAAC_RUNTIME_DIR="$(dirname "$ISAAC_PYTHON")"
+# Isaac Sim 6.0: libs ROS 2 embutidas em exts/isaacsim.ros2.core/<distro>/lib
+# Isaac Sim 5.1: exts/isaacsim.ros2.bridge/<distro>/lib
+BRIDGE_LIB_DIR="$ISAAC_RUNTIME_DIR/exts/isaacsim.ros2.core/${ROS_DISTRO}/lib"
+if [ ! -d "$BRIDGE_LIB_DIR" ]; then
+  BRIDGE_LIB_DIR="$ISAAC_RUNTIME_DIR/exts/isaacsim.ros2.bridge/${ROS_DISTRO}/lib"
+fi
+
+if [ -d "$BRIDGE_LIB_DIR" ]; then
+  # Isaac Sim package com bibliotecas ROS 2 leves embutidas.
+  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${BRIDGE_LIB_DIR}"
+  echo "ROS2 Bridge: usando libs embutidas do Isaac ($BRIDGE_LIB_DIR)"
+elif [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
+  # Alguns pacotes não trazem as libs embutidas; use ROS do sistema.
+  set +u
+  # shellcheck source=/dev/null
+  source "/opt/ros/${ROS_DISTRO}/setup.bash"
+  set -u
+  export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+  echo "ROS2 Bridge: usando ROS do sistema (/opt/ros/${ROS_DISTRO})"
+else
+  echo "Erro: não encontrei libs do ROS2 Bridge nem /opt/ros/${ROS_DISTRO}/setup.bash"
+  echo "Instale ROS 2 ${ROS_DISTRO} ou verifique ISAAC_SIM_PATH."
+  exit 1
 fi
 
 echo "Rodando Oracle Vision (SimulationApp + Pegasus):"
 echo "$SCRIPT_PATH"
+echo "ROS_DISTRO=${ROS_DISTRO} RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}"
 
 exec "$ISAAC_PYTHON" "$SCRIPT_PATH" "$@"
